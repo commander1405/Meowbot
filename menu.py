@@ -1,0 +1,190 @@
+# ==========================================
+# 🐱 MeowBot - Main Menu (Start / Inline)
+# ==========================================
+
+from bale import InlineKeyboardMarkup, InlineKeyboardButton
+
+from profile import format_profile
+
+
+# ------------------------------------------
+# Callback data
+# ------------------------------------------
+
+CB_MAIN = "menu:main"
+CB_PROFILE = "menu:profile"
+CB_PET = "pet:home"
+CB_ABOUT = "menu:about"
+CB_ADD_GROUP = "menu:add_group"
+CB_GUIDE = "menu:guide"
+
+
+# ------------------------------------------
+# Texts
+# ------------------------------------------
+
+WELCOME_TEXT = (
+    "🐱 خوش اومدی به MeowBot!\n"
+    "\n"
+    "از منوی زیر بخش موردنظرت رو انتخاب کن."
+)
+
+ABOUT_TEXT = (
+    "🐱 MeowBot\n"
+    "\n"
+    "این ربات توسط ۱ نفر ساخته و توسعه داده شده است.\n"
+    "\n"
+    "👨‍💻 سازنده:\n"
+    "@commander04\n"
+    "\n"
+    "📩 برای ارتباط:\n"
+    "@commander04"
+)
+
+ADD_GROUP_TEXT = (
+    "🐱 افزودن MeowBot به گروه\n"
+    "\n"
+    "می‌خوای MeowBot رو به گروهت اضافه کنی؟\n"
+    "\n"
+    "1️⃣ وارد گروه موردنظرت شو.\n"
+    "2️⃣ بخش افزودن عضو را باز کن.\n"
+    "3️⃣ آیدی ربات را جستجو کن:\n"
+    "\n"
+    "🤖 @meowDarkKnightbot\n"
+    "\n"
+    "4️⃣ ربات را به گروه اضافه کن.\n"
+    "5️⃣ اگر برای فعالیت صحیح نیاز به دسترسی ادمین داشت، "
+    "دسترسی‌های لازم را به آن بده.\n"
+    "\n"
+    "✅ حالا MeowBot آماده استفاده در گروه است!"
+)
+
+GUIDE_MENU_TEXT = (
+    "🐱 راهنمای MeowBot\n"
+    "\n"
+    "━━━━━━━━━━━━━━\n"
+    "\n"
+    "دستور : میو\n"
+    "برای گرفتن Meow Point\n"
+    "\n"
+    "دستور : پروفایل\n"
+    "برای دیدن پروفایل\n"
+    "\n"
+    "دستور : رنکینگ\n"
+    "برای دیدن برترین‌های گروه\n"
+    "\n"
+    "دستور : باشگاه\n"
+    "برای دیدن و ارتقای Gym\n"
+    "\n"
+    "دستور : جنگ میویی\n"
+    "ریپلای روی حریف + جنگ میویی\n"
+    "\n"
+    "دستور : انتقال میویی ۱۰\n"
+    "ریپلای + انتقال کوین\n"
+    "\n"
+    "دستور : حقیقت / جرأت / فکت\n"
+    "برای بازی گروهی\n"
+    "\n"
+    "دستور : بانک میویی\n"
+    "بانک و کارت‌به‌کارت\n"
+    "\n"
+    "دستور : پیشی\n"
+    "وضعیت Pet در گروه\n"
+    "\n"
+    "دستور : اکو متن\n"
+    "ربات همون متن رو می‌فرسته\n"
+    "\n"
+    "دستور : راهنما\n"
+    "همین راهنما\n"
+    "\n"
+    "━━━━━━━━━━━━━━\n"
+    "Pet کامل از /start در پیوی ربات 🐱"
+)
+
+
+
+# ------------------------------------------
+# Keyboards
+# ------------------------------------------
+
+def main_menu_keyboard():
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton(text="👤 پروفایل", callback_data=CB_PROFILE),
+        row=1,
+    )
+    markup.add(
+        InlineKeyboardButton(text="🐱 Pet Meow", callback_data=CB_PET),
+        row=1,
+    )
+    markup.add(
+        InlineKeyboardButton(text="ℹ️ درباره ما", callback_data=CB_ABOUT),
+        row=2,
+    )
+    markup.add(
+        InlineKeyboardButton(text="➕ افزودن ربات به گروه", callback_data=CB_ADD_GROUP),
+        row=3,
+    )
+    markup.add(
+        InlineKeyboardButton(text="📖 آموزش", callback_data=CB_GUIDE),
+        row=4,
+    )
+    return markup
+
+
+def back_keyboard():
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton(text="🔙 بازگشت", callback_data=CB_MAIN),
+        row=1,
+    )
+    return markup
+
+
+def is_start_command(text):
+    if not text:
+        return False
+    normalized = str(text).strip().lower()
+    if normalized.startswith("/start"):
+        return True
+    if normalized in {"start", "استارت"}:
+        return True
+    return False
+
+
+def is_menu_callback(data):
+    if not data:
+        return False
+    return str(data).startswith("menu:")
+
+
+def build_profile_text(user):
+    user_id = getattr(user, "id", None)
+    first_name = getattr(user, "first_name", None) or "Unknown"
+    username = getattr(user, "username", None) or ""
+
+    if user_id is None:
+        return "❌ اطلاعات کاربر پیدا نشد."
+
+    return format_profile(
+        user_id=user_id,
+        chat_id=None,
+        first_name=first_name,
+        username=username,
+    )
+
+
+def get_menu_page(data, user):
+    if data == CB_PROFILE:
+        return build_profile_text(user), back_keyboard()
+
+    if data == CB_ABOUT:
+        return ABOUT_TEXT, back_keyboard()
+
+    if data == CB_ADD_GROUP:
+        return ADD_GROUP_TEXT, back_keyboard()
+
+    if data == CB_GUIDE:
+        return GUIDE_MENU_TEXT, back_keyboard()
+
+    return WELCOME_TEXT, main_menu_keyboard()
