@@ -33,7 +33,7 @@ ADMINS = [
 # اگر local اجرا می‌کنید، مقدار را اینجا یا در .env بگذارید.
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:BPuzPwSHnAnhJssOaBjdlIwqbRlEeIJD@postgres.railway.internal:5432/railway",
+    "postgresql://postgres:NfponPUlsIArmWYAfusdHVhErHdXiXYW@postgres.railway.internal:5432/railway",
 )
 
 # Connection pool
