@@ -9,6 +9,7 @@ import traceback
 from bale import Bot, Message, CallbackQuery
 
 from config import BOT_TOKEN, OWNER_ID, BOT_NAME, BOT_VERSION, MAX_GYM_LEVEL
+from utils.ui_helpers import patch_bot_messaging, with_promo
 
 from database import init_database
 from database.users import (
@@ -35,6 +36,10 @@ _start_time = time.time()
 
 
 async def _edit_or_reply(target, text, kb=None):
+    try:
+        kb = with_promo(kb)
+    except Exception:
+        pass
     """Edit message if possible, otherwise reply. Never silent."""
     if text is None:
         text = "…"
@@ -93,6 +98,10 @@ async def _edit_or_reply(target, text, kb=None):
 async def on_ready():
     print("=" * 55)
     print(f"🐱 {BOT_NAME} v{BOT_VERSION} ONLINE (Glass UI)")
+    try:
+        patch_bot_messaging(bot)
+    except Exception as _pe:
+        print(f"⚠️ promo patch: {_pe}")
     print("=" * 55)
     try:
         await init_database()
