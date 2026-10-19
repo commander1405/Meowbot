@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from .api import RubikaAPI, RubikaAPIError
 from .config import (
-    OWNER_ID, SUPPORT_TEXT, DONATION_TEXT, ABOUT_TEXT, BOT_VERSION, RATE_LIMIT_PER_USER,
+    OWNER_ID, OWNER_USERNAME, SUPPORT_TEXT, DONATION_TEXT, ABOUT_TEXT, BOT_VERSION, RATE_LIMIT_PER_USER,
 )
 from .database import Database
 from . import keyboards as kb
@@ -50,16 +50,38 @@ class MegaRubikaBot:
         self._rate: dict[str, float] = {}  # user_id -> last_ts
         self.bot_id: str | None = None
         self.bot_name: str = "MEGA BOT"
+        self._owner_uid_cache: str | None = None
 
     # ---------- helpers ----------
-    def _is_owner(self, user_id: str, chat_id: str | None = None) -> bool:
-        if not OWNER_ID:
-            return False
-        oid = str(OWNER_ID)
-        if user_id and str(user_id) == oid:
+    def _is_owner(self, user_id: str, chat_id: str | None = None, username: str | None = None) -> bool:
+        oid = str(OWNER_ID or "")
+        if user_id and oid and str(user_id) == oid:
             return True
-        # گاهی در PV شناسه چت همان کاربر است
-        if chat_id and str(chat_id) == oid:
+        if chat_id and oid and str(chat_id) == oid:
+            return True
+        # تشخیص با یوزرنیم @commander04
+        uname = (username or "").lstrip("@").lower().strip()
+        if OWNER_USERNAME and uname and uname == OWNER_USERNAME.lower():
+            return True
+        # کش از دیتابیس: اگر قبلاً یوزرنیم مالک به user_id مپ شده
+        cached = getattr(self, "_owner_uid_cache", None)
+        if cached and user_id and str(user_id) == str(cached):
+            return True
+        return False
+
+    async def _refresh_owner_cache(self, user_id: str, username: str) -> None:
+        uname = (username or "").lstrip("@").lower().strip()
+        if not uname or not user_id:
+            return
+        await self.db.map_username(uname, user_id)
+        if OWNER_USERNAME and uname == OWNER_USERNAME.lower():
+            self._owner_uid_cache = str(user_id)
+            log.info("owner resolved via @%s -> %s", uname, user_id)
+
+    async def _can_moderate(self, chat_id: str, user_id: str, username: str | None = None) -> bool:
+        if self._is_owner(user_id, chat_id, username):
+            return True
+        if user_id and await self.db.is_group_admin(chat_id, user_id):
             return True
         return False
 
@@ -91,6 +113,14 @@ class MegaRubikaBot:
         ):
             raw = raw["data"]
 
+        def _pick_username(src: dict) -> str:
+            return str(
+                src.get("username")
+                or src.get("user_name")
+                or (src.get("author") or {}).get("username")
+                or ""
+            ).lstrip("@")
+
         # inline button / keypad tap
         if "inline_message" in raw and isinstance(raw["inline_message"], dict):
             im = raw["inline_message"]
@@ -98,6 +128,7 @@ class MegaRubikaBot:
             return {
                 "chat_id": str(im.get("chat_id") or ""),
                 "sender_id": str(im.get("sender_id") or ""),
+                "username": _pick_username(im),
                 "text": (im.get("text") or "").strip(),
                 "message_id": str(im.get("message_id") or ""),
                 "button_id": aux.get("button_id") or im.get("button_id"),
@@ -112,6 +143,7 @@ class MegaRubikaBot:
             return {
                 "chat_id": str(chat_id or msg.get("chat_id") or ""),
                 "sender_id": str(msg.get("sender_id") or ""),
+                "username": _pick_username(msg),
                 "text": (msg.get("text") or "").strip(),
                 "message_id": str(msg.get("message_id") or ""),
                 "button_id": aux.get("button_id") or msg.get("button_id"),
@@ -124,6 +156,7 @@ class MegaRubikaBot:
             return {
                 "chat_id": str(raw.get("chat_id") or ""),
                 "sender_id": str(raw.get("sender_id") or ""),
+                "username": _pick_username(raw),
                 "text": (raw.get("text") or "").strip(),
                 "message_id": str(raw.get("message_id") or ""),
                 "button_id": aux.get("button_id") or raw.get("button_id"),
@@ -250,10 +283,13 @@ class MegaRubikaBot:
             log.debug("no chat_id in normalized msg: %s", msg)
             return
         log.info("in chat=%s user=%s text=%r btn=%r", chat_id[:16], (user_id or "")[:16], text[:40], btn)
+        username = (msg.get("username") or "").lstrip("@")
 
-        # ثبت کاربر/گروه
+        # ثبت کاربر/گروه + مپ یوزرنیم
         if user_id:
-            await self.db.upsert_user(user_id, first_name=msg.get("first_name") or "")
+            await self.db.upsert_user(user_id, username=username, first_name=msg.get("first_name") or "")
+            if username:
+                await self._refresh_owner_cache(user_id, username)
         is_group = str(chat_id).startswith("g0") or str(chat_id).startswith("c0")
         await self.db.upsert_group(chat_id)
         await self.db.track_event(chat_id, "group" if is_group else "private", user_id)
@@ -292,9 +328,15 @@ class MegaRubikaBot:
             "joke", "جوک", "hafez", "حافظ", "فال", "about", "درباره", "ping", "پینگ",
             "id", "آیدی", "me", "من", "time", "ساعت", "support", "پشتیبانی",
             "owner", "admin", "team", "تیم",
+            "ban", "بن", "unban", "آنبن", "انبن", "mute", "سکوت", "unmute", "رفع‌سکوت", "رفع سکوت",
+            "rules", "قوانین", "setrules", "تنظیم‌قوانین", "تنظیم قوانین",
+            "welcome", "خوشامد", "setwelcome", "تنظیم‌خوشامد", "تنظیم خوشامد",
+            "promote", "ادمین", "demote", "عزل", "mod", "مدیریت",
         }
-        if is_group and first not in group_cmds and cmd not in (
-            "جوک", "حافظ", "فال", "آمار", "راهنما", "درباره", "پینگ", "آیدی", "تیم",
+        # شروع دستورات چندکلمه‌ای فارسی
+        group_prefixes = ("تنظیم قوانین", "تنظیم خوشامد", "بن ", "آنبن ", "سکوت ", "قوانین", "خوشامد")
+        if is_group and first not in group_cmds and not any(cmd.startswith(px) for px in group_prefixes) and cmd not in (
+            "جوک", "حافظ", "فال", "آمار", "راهنما", "درباره", "پینگ", "آیدی", "تیم", "قوانین", "خوشامد",
         ):
             return
 
@@ -306,9 +348,9 @@ class MegaRubikaBot:
         elif first in ("help", "راهنما") or cmd in ("/help", "help", "راهنما"):
             await self.cmd_help(chat_id, is_group=is_group)
         elif first in ("owner",):
-            await self.cmd_owner(chat_id, user_id)
+            await self.cmd_owner(chat_id, user_id, username)
         elif first in ("admin",):
-            await self.cmd_admin(chat_id, user_id)
+            await self.cmd_admin(chat_id, user_id, username)
         elif first in ("stats", "آمار", "info", "اطلاعات") or cmd in ("آمار",):
             await self.cmd_stats(chat_id)
         elif first in ("joke", "جوک") or cmd in ("جوک",):
@@ -332,6 +374,33 @@ class MegaRubikaBot:
             await self.safe_send(chat_id, SUPPORT_TEXT)
         elif first in ("team", "تیم") or cmd in ("تیم",):
             await self._on_button(chat_id, user_id, "team", msg)
+        elif first in ("rules", "قوانین") or cmd in ("قوانین",):
+            await self.cmd_rules(chat_id)
+        elif first in ("welcome", "خوشامد") or cmd in ("خوشامد",):
+            await self.cmd_welcome(chat_id)
+        elif first in ("mod", "مدیریت"):
+            await self.cmd_mod_help(chat_id)
+        elif cmd.startswith("تنظیم قوانین") or first in ("setrules", "تنظیم‌قوانین"):
+            body = cmd.split("تنظیم قوانین", 1)[-1].strip() if "تنظیم قوانین" in cmd else cmd.split(maxsplit=1)[-1] if " " in cmd else ""
+            await self.cmd_set_rules(chat_id, user_id, username, body)
+        elif cmd.startswith("تنظیم خوشامد") or first in ("setwelcome", "تنظیم‌خوشامد"):
+            body = cmd.split("تنظیم خوشامد", 1)[-1].strip() if "تنظیم خوشامد" in cmd else cmd.split(maxsplit=1)[-1] if " " in cmd else ""
+            await self.cmd_set_welcome(chat_id, user_id, username, body)
+        elif first in ("ban", "بن") or cmd.startswith("بن "):
+            target = cmd.split(maxsplit=1)[1] if " " in cmd else ""
+            await self.cmd_ban(chat_id, user_id, username, target)
+        elif first in ("unban", "آنبن", "انبن") or cmd.startswith("آنبن "):
+            target = cmd.split(maxsplit=1)[1] if " " in cmd else ""
+            await self.cmd_unban(chat_id, user_id, username, target)
+        elif first in ("mute", "سکوت") or cmd.startswith("سکوت "):
+            target = cmd.split(maxsplit=1)[1] if " " in cmd else ""
+            await self.cmd_mute(chat_id, user_id, username, target)
+        elif first in ("promote", "ادمین"):
+            target = cmd.split(maxsplit=1)[1] if " " in cmd else ""
+            await self.cmd_promote(chat_id, user_id, username, target)
+        elif first in ("demote", "عزل"):
+            target = cmd.split(maxsplit=1)[1] if " " in cmd else ""
+            await self.cmd_demote(chat_id, user_id, username, target)
         elif not is_group:
             await self._on_menu_text(chat_id, user_id, text)
 
@@ -394,30 +463,178 @@ class MegaRubikaBot:
         fal = random.choice(HAFEZ_FALS) if HAFEZ_FALS else "امروز فال نداری 📜"
         await self.safe_send(chat_id, f"📜 فال حافظ\n\n{fal}")
 
-    async def cmd_owner(self, chat_id: str, user_id: str) -> None:
-        # همیشه شناسه فرستنده را نشان بده تا OWNER_ID درست ست شود
-        if not self._is_owner(user_id, chat_id):
+    async def cmd_owner(self, chat_id: str, user_id: str, username: str = "") -> None:
+        if not self._is_owner(user_id, chat_id, username):
             await self.safe_send(
                 chat_id,
-                f"⛔️ فقط مالک.\nشناسه شما: `{user_id or '—'}`\nچت: `{chat_id}`\n"
-                f"OWNER فعلی: `{OWNER_ID}`",
+                "⛔️ فقط مالک.\n"
+                f"شناسه شما: `{user_id or '—'}`\n"
+                f"یوزرنیم: @{username or '—'}\n"
+                f"چت: `{chat_id}`\n"
+                f"OWNER_ID: `{OWNER_ID}`\n"
+                f"OWNER_USERNAME: @{OWNER_USERNAME}\n"
+                "اگر مالک هستی یک‌بار در پیوی پیام بده تا یوزرنیم ثبت شود.",
             )
             return
         text = (
             f"👑 پنل مالک\n"
-            f"شناسه تو: `{user_id}`\n"
-            f"از دکمه‌ها استفاده کن."
+            f"شناسه: `{user_id}`\n"
+            f"یوزرنیم: @{username or OWNER_USERNAME}\n"
+            "از دکمه‌ها استفاده کن."
         )
         await self.safe_send(chat_id, text, chat_keypad=kb.OWNER_MENU)
 
-    async def cmd_admin(self, chat_id: str, user_id: str) -> None:
-        if not self._is_owner(user_id, chat_id):
+    async def cmd_admin(self, chat_id: str, user_id: str, username: str = "") -> None:
+        if not await self._can_moderate(chat_id, user_id, username):
             await self.safe_send(
                 chat_id,
                 f"دسترسی نداری.\nشناسه شما: `{user_id or '—'}`",
             )
             return
-        await self.safe_send(chat_id, "🛠 پنل ادمین", chat_keypad=kb.ADMIN_MENU)
+        await self.safe_send(chat_id, "🛠 پنل ادمین / مدیریت گروه", chat_keypad=kb.ADMIN_MENU)
+
+    async def cmd_mod_help(self, chat_id: str) -> None:
+        await self.safe_send(
+            chat_id,
+            "🛡 دستورات مدیریت گروه\n\n"
+            "• قوانین — نمایش قوانین\n"
+            "• تنظیم قوانین <متن>\n"
+            "• خوشامد — متن خوش‌آمد\n"
+            "• تنظیم خوشامد <متن>\n"
+            "• بن <user_id|@user> [دلیل]\n"
+            "• آنبن <user_id|کدپرونده>\n"
+            "• سکوت <user_id> [دلیل]\n"
+            "• ادمین <user_id> — ادمین ربات در گروه\n"
+            "• عزل <user_id>\n\n"
+            "⚠️ بن واقعی پلتفرم فقط اگر API و دسترسی ادمین ربات اجازه بدهد؛ "
+            "بن داخلی همیشه جلوی استفاده از ربات را می‌گیرد.",
+        )
+
+    async def cmd_rules(self, chat_id: str) -> None:
+        gs = await self.db.get_group_settings(chat_id)
+        rules = (gs.get("rules") or "").strip() or "هنوز قانونی تنظیم نشده.\nمالک/ادمین: تنظیم قوانین <متن>"
+        await self.safe_send(chat_id, f"📜 قوانین گروه\n\n{rules}")
+
+    async def cmd_welcome(self, chat_id: str) -> None:
+        gs = await self.db.get_group_settings(chat_id)
+        w = (gs.get("welcome") or "").strip() or "خوش‌آمد تنظیم نشده.\nتنظیم خوشامد <متن>"
+        await self.safe_send(chat_id, f"👋 {w}")
+
+    async def cmd_set_rules(self, chat_id: str, user_id: str, username: str, body: str) -> None:
+        if not await self._can_moderate(chat_id, user_id, username):
+            await self.safe_send(chat_id, "⛔️ فقط مالک/ادمین گروه.")
+            return
+        body = (body or "").strip()
+        if not body:
+            await self.safe_send(chat_id, "مثال: تنظیم قوانین احترام واجب است")
+            return
+        await self.db.set_group_rules(chat_id, body)
+        await self.db.log_action(user_id, "set_rules", "group", chat_id, {"rules": body[:200]})
+        await self.safe_send(chat_id, "✅ قوانین ذخیره شد.")
+
+    async def cmd_set_welcome(self, chat_id: str, user_id: str, username: str, body: str) -> None:
+        if not await self._can_moderate(chat_id, user_id, username):
+            await self.safe_send(chat_id, "⛔️ فقط مالک/ادمین گروه.")
+            return
+        body = (body or "").strip()
+        if not body:
+            await self.safe_send(chat_id, "مثال: تنظیم خوشامد به گروه خوش اومدی")
+            return
+        await self.db.set_group_welcome(chat_id, body)
+        await self.safe_send(chat_id, "✅ متن خوش‌آمد ذخیره شد.")
+
+    async def _resolve_target(self, token: str) -> str | None:
+        token = (token or "").strip()
+        if not token:
+            return None
+        if token.startswith("@"):
+            return await self.db.user_id_by_username(token)
+        # user id خام
+        return token.split()[0]
+
+    async def cmd_ban(self, chat_id: str, user_id: str, username: str, target_raw: str) -> None:
+        if not await self._can_moderate(chat_id, user_id, username):
+            await self.safe_send(chat_id, "⛔️ فقط مالک/ادمین.")
+            return
+        parts = (target_raw or "").split(maxsplit=1)
+        if not parts:
+            await self.safe_send(chat_id, "مثال: بن u0xxxx دلیل")
+            return
+        target = await self._resolve_target(parts[0])
+        reason = parts[1] if len(parts) > 1 else "بدون دلیل"
+        if not target:
+            await self.safe_send(chat_id, "هدف پیدا نشد. از user_id استفاده کن یا یک‌بار کاربر به ربات پیام داده باشد.")
+            return
+        code = await self.db.create_case("user", target, reason, user_id, permanent=True, action="ban")
+        # تلاش برای بن پلتفرمی (ممکن است API رد کند)
+        platform_ok = False
+        try:
+            await self.api.ban_chat_member(chat_id, target)
+            platform_ok = True
+        except Exception as e:
+            log.warning("platform ban failed: %s", e)
+        await self.db.log_action(user_id, "ban", "user", target, {"reason": reason, "case": code, "platform": platform_ok})
+        extra = " + بن پلتفرم" if platform_ok else " (فقط بن داخلی ربات — API پلتفرم اجازه نداد یا ربات ادمین نیست)"
+        await self.safe_send(chat_id, f"🚫 کاربر محدود شد.\nپرونده: #{code}\nدلیل: {reason}{extra}")
+
+    async def cmd_unban(self, chat_id: str, user_id: str, username: str, target_raw: str) -> None:
+        if not await self._can_moderate(chat_id, user_id, username):
+            await self.safe_send(chat_id, "⛔️ فقط مالک/ادمین.")
+            return
+        token = (target_raw or "").strip().lstrip("#")
+        if not token:
+            await self.safe_send(chat_id, "مثال: آنبن 1001  یا  آنبن u0xxxx")
+            return
+        if token.isdigit():
+            ok = await self.db.lift_case(int(token), user_id, "unban command")
+            await self.safe_send(chat_id, "✅ پرونده بسته شد." if ok else "پرونده فعال پیدا نشد.")
+            return
+        target = await self._resolve_target(token) or token
+        # همه پرونده‌های فعال این کاربر را ببند — ساده‌سازی: lift by creating note
+        try:
+            await self.api.unban_chat_member(chat_id, target)
+        except Exception:
+            pass
+        await self.db.log_action(user_id, "unban_attempt", "user", target, {})
+        await self.safe_send(chat_id, f"درخواست آنبن برای `{target}` ثبت شد. اگر کد پرونده داری با آنبن #کد بزن.")
+
+    async def cmd_mute(self, chat_id: str, user_id: str, username: str, target_raw: str) -> None:
+        if not await self._can_moderate(chat_id, user_id, username):
+            await self.safe_send(chat_id, "⛔️ فقط مالک/ادمین.")
+            return
+        parts = (target_raw or "").split(maxsplit=1)
+        if not parts:
+            await self.safe_send(chat_id, "مثال: سکوت u0xxxx")
+            return
+        target = await self._resolve_target(parts[0])
+        reason = parts[1] if len(parts) > 1 else "سکوت"
+        if not target:
+            await self.safe_send(chat_id, "هدف نامعتبر.")
+            return
+        code = await self.db.create_case("user", target, reason, user_id, duration_days=1, action="mute")
+        await self.safe_send(chat_id, f"🔇 سکوت داخلی ثبت شد.\nپرونده: #{code}")
+
+    async def cmd_promote(self, chat_id: str, user_id: str, username: str, target_raw: str) -> None:
+        if not self._is_owner(user_id, chat_id, username):
+            await self.safe_send(chat_id, "⛔️ فقط مالک می‌تواند ادمین ربات اضافه کند.")
+            return
+        target = await self._resolve_target(target_raw)
+        if not target:
+            await self.safe_send(chat_id, "مثال: ادمین u0xxxx")
+            return
+        await self.db.add_group_admin(chat_id, target, user_id)
+        await self.safe_send(chat_id, f"✅ `{target}` ادمین ربات در این گروه شد.")
+
+    async def cmd_demote(self, chat_id: str, user_id: str, username: str, target_raw: str) -> None:
+        if not self._is_owner(user_id, chat_id, username):
+            await self.safe_send(chat_id, "⛔️ فقط مالک.")
+            return
+        target = await self._resolve_target(target_raw)
+        if not target:
+            await self.safe_send(chat_id, "مثال: عزل u0xxxx")
+            return
+        await self.db.remove_group_admin(chat_id, target)
+        await self.safe_send(chat_id, f"✅ `{target}` از ادمین‌های ربات برداشته شد.")
 
     # ---------- buttons & menu text ----------
     async def _on_menu_text(self, chat_id: str, user_id: str, text: str) -> None:

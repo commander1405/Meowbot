@@ -26,11 +26,13 @@ BOT_TOKEN: str = os.getenv(
     "RUBIKA_BOT_TOKEN",
     "CFBGIB0PENJLTJENBWIZPOKSVILEEIZLHZNZYJVBDIFBGLLCGTUBTNBJDXHPJCWW",
 ).strip()
-# شناسه مالک (طبق درخواست)
+# شناسه مالک (اگر u0... داری بگذار؛ در غیر این صورت با یوزرنیم تشخیص داده می‌شود)
 OWNER_ID: str = os.getenv(
     "RUBIKA_OWNER_ID",
     "b0FSde30BEEl0af919ab0bfa8489edc5",
 ).strip()
+# یوزرنیم مالک بدون @
+OWNER_USERNAME: str = os.getenv("RUBIKA_OWNER_USERNAME", "commander04").strip().lstrip("@").lower()
 
 # دیتابیس SQLite — مسیر ثابت تا با تغییر cwd خراب نشود
 DATABASE_PATH: str = os.getenv(

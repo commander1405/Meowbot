@@ -116,6 +116,28 @@ CREATE TABLE IF NOT EXISTS user_states (
   data TEXT DEFAULT '{}',
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS group_settings (
+  chat_id TEXT PRIMARY KEY,
+  rules TEXT DEFAULT '',
+  welcome TEXT DEFAULT '',
+  locks TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS group_admins (
+  chat_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  added_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (chat_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS username_map (
+  username TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -337,3 +359,78 @@ class Database:
         )
         row = await self._fetchone("SELECT last_insert_rowid() AS id")
         return int(row["id"]) if row else 0
+
+    # ---------- username map ----------
+    async def map_username(self, username: str, user_id: str) -> None:
+        u = (username or "").lstrip("@").lower().strip()
+        if not u or not user_id:
+            return
+        await self._exec(
+            "INSERT INTO username_map (username, user_id, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(username) DO UPDATE SET user_id=excluded.user_id, updated_at=excluded.updated_at",
+            (u, user_id, _now()),
+        )
+        # users.username هم به‌روز شود
+        await self._exec(
+            "UPDATE users SET username=? WHERE user_id=?",
+            (u, user_id),
+        )
+
+    async def user_id_by_username(self, username: str) -> Optional[str]:
+        u = (username or "").lstrip("@").lower().strip()
+        if not u:
+            return None
+        row = await self._fetchone("SELECT user_id FROM username_map WHERE username=?", (u,))
+        if row:
+            return str(row["user_id"])
+        row = await self._fetchone(
+            "SELECT user_id FROM users WHERE LOWER(username)=? LIMIT 1", (u,)
+        )
+        return str(row["user_id"]) if row else None
+
+    # ---------- group settings ----------
+    async def get_group_settings(self, chat_id: str) -> dict:
+        row = await self._fetchone("SELECT * FROM group_settings WHERE chat_id=?", (chat_id,))
+        if not row:
+            return {"chat_id": chat_id, "rules": "", "welcome": "", "locks": {}}
+        d = dict(row)
+        try:
+            d["locks"] = json.loads(d.get("locks") or "{}")
+        except Exception:
+            d["locks"] = {}
+        return d
+
+    async def set_group_rules(self, chat_id: str, rules: str) -> None:
+        now = _now()
+        await self._exec(
+            "INSERT INTO group_settings (chat_id, rules, welcome, locks, updated_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET rules=excluded.rules, updated_at=excluded.updated_at",
+            (chat_id, rules, "", "{}", now),
+        )
+
+    async def set_group_welcome(self, chat_id: str, welcome: str) -> None:
+        now = _now()
+        await self._exec(
+            "INSERT INTO group_settings (chat_id, rules, welcome, locks, updated_at) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET welcome=excluded.welcome, updated_at=excluded.updated_at",
+            (chat_id, "", welcome, "{}", now),
+        )
+
+    async def add_group_admin(self, chat_id: str, user_id: str, added_by: str) -> None:
+        await self._exec(
+            "INSERT OR IGNORE INTO group_admins (chat_id, user_id, added_by, created_at) VALUES (?,?,?,?)",
+            (chat_id, user_id, added_by, _now()),
+        )
+
+    async def remove_group_admin(self, chat_id: str, user_id: str) -> None:
+        await self._exec(
+            "DELETE FROM group_admins WHERE chat_id=? AND user_id=?",
+            (chat_id, user_id),
+        )
+
+    async def is_group_admin(self, chat_id: str, user_id: str) -> bool:
+        row = await self._fetchone(
+            "SELECT 1 FROM group_admins WHERE chat_id=? AND user_id=?",
+            (chat_id, user_id),
+        )
+        return row is not None
