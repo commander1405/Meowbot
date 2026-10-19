@@ -52,8 +52,16 @@ class MegaRubikaBot:
         self.bot_name: str = "MEGA BOT"
 
     # ---------- helpers ----------
-    def _is_owner(self, user_id: str) -> bool:
-        return bool(OWNER_ID) and str(user_id) == str(OWNER_ID)
+    def _is_owner(self, user_id: str, chat_id: str | None = None) -> bool:
+        if not OWNER_ID:
+            return False
+        oid = str(OWNER_ID)
+        if user_id and str(user_id) == oid:
+            return True
+        # گاهی در PV شناسه چت همان کاربر است
+        if chat_id and str(chat_id) == oid:
+            return True
+        return False
 
     def _rate_ok(self, user_id: str) -> bool:
         now = time.monotonic()
@@ -252,64 +260,117 @@ class MegaRubikaBot:
 
         # بن داخلی
         if user_id and await self.db.is_banned("user", user_id):
-            if not self._is_owner(user_id):
+            if not self._is_owner(user_id, chat_id):
                 return
         if await self.db.is_banned("group", chat_id):
+            return
+
+        # دکمه کیپد
+        if btn:
+            if user_id and not self._rate_ok(user_id):
+                return
+            await self._on_button(chat_id, user_id, btn, msg)
+            return
+
+        if not text:
+            return
+
+        # نرمال‌سازی دستور (گروه/خصوصی)
+        cmd = text.strip()
+        # حذف منشن احتمالی ربات
+        for prefix in ("@",):
+            if cmd.startswith(prefix) and " " in cmd:
+                cmd = cmd.split(" ", 1)[-1].strip()
+        low = cmd.lower().lstrip("/").strip()
+        first = low.split()[0] if low else ""
+
+        is_group = str(chat_id).startswith("g0") or str(chat_id).startswith("c0")
+
+        # در گروه فقط به دستورات شناخته‌شده جواب بده (اسپم نشه)
+        group_cmds = {
+            "start", "شروع", "help", "راهنما", "stats", "آمار", "info", "اطلاعات",
+            "joke", "جوک", "hafez", "حافظ", "فال", "about", "درباره", "ping", "پینگ",
+            "id", "آیدی", "me", "من", "time", "ساعت", "support", "پشتیبانی",
+            "owner", "admin", "team", "تیم",
+        }
+        if is_group and first not in group_cmds and cmd not in (
+            "جوک", "حافظ", "فال", "آمار", "راهنما", "درباره", "پینگ", "آیدی", "تیم",
+        ):
             return
 
         if user_id and not self._rate_ok(user_id):
             return
 
-        # دکمه
-        if btn:
-            await self._on_button(chat_id, user_id, btn, msg)
-            return
-
-        # دستور متنی
-        low = text.lower().lstrip("/")
-        if text in ("/start", "start", "شروع") or low == "start":
-            await self.cmd_start(chat_id, user_id)
-        elif text in ("/help", "help", "راهنما"):
-            await self.cmd_help(chat_id)
-        elif text in ("/owner", "owner") and self._is_owner(user_id):
+        if first in ("start", "شروع") or cmd in ("/start", "start", "شروع"):
+            await self.cmd_start(chat_id, user_id, is_group=is_group)
+        elif first in ("help", "راهنما") or cmd in ("/help", "help", "راهنما"):
+            await self.cmd_help(chat_id, is_group=is_group)
+        elif first in ("owner",):
             await self.cmd_owner(chat_id, user_id)
-        elif text in ("/admin", "admin"):
+        elif first in ("admin",):
             await self.cmd_admin(chat_id, user_id)
-        elif text in ("/stats", "آمار"):
+        elif first in ("stats", "آمار", "info", "اطلاعات") or cmd in ("آمار",):
             await self.cmd_stats(chat_id)
-        elif text in ("جوک", "joke"):
+        elif first in ("joke", "جوک") or cmd in ("جوک",):
             await self.cmd_joke(chat_id)
-        elif text in ("حافظ", "فال", "hafez"):
+        elif first in ("hafez", "حافظ", "فال") or cmd in ("حافظ", "فال"):
             await self.cmd_hafez(chat_id)
-        elif text in ("درباره", "about"):
+        elif first in ("about", "درباره") or cmd in ("درباره",):
             await self.cmd_about(chat_id)
-        elif text:
-            # منوهای reply keyboard با متن
+        elif first in ("ping", "پینگ") or cmd in ("پینگ",):
+            await self.safe_send(chat_id, "pong ✅")
+        elif first in ("id", "آیدی", "me", "من") or cmd in ("آیدی",):
+            await self.safe_send(
+                chat_id,
+                f"شناسه شما:\n`{user_id or '—'}`\nچت:\n`{chat_id}`",
+            )
+        elif first in ("time", "ساعت"):
+            from datetime import datetime, timezone, timedelta
+            tehran = datetime.now(timezone(timedelta(hours=3, minutes=30)))
+            await self.safe_send(chat_id, f"🕰 {tehran.strftime('%Y-%m-%d %H:%M:%S')} (تهران)")
+        elif first in ("support", "پشتیبانی"):
+            await self.safe_send(chat_id, SUPPORT_TEXT)
+        elif first in ("team", "تیم") or cmd in ("تیم",):
+            await self._on_button(chat_id, user_id, "team", msg)
+        elif not is_group:
             await self._on_menu_text(chat_id, user_id, text)
 
     # ---------- commands ----------
-    async def cmd_start(self, chat_id: str, user_id: str) -> None:
+    async def cmd_start(self, chat_id: str, user_id: str, is_group: bool = False) -> None:
         name = self.bot_name
         text = (
             f"سلام! 👋\n"
-            f"من **{name}** نسخه روبیکا هستم.\n"
-            f"از منوی پایین استفاده کن یا /help بزن.\n\n"
-            f"نسخه: `{BOT_VERSION}`"
+            f"من {name} نسخه روبیکا هستم.\n"
+            f"دستورات: /help\n"
+            f"نسخه: {BOT_VERSION}"
         )
-        await self.safe_send(chat_id, text, chat_keypad=kb.USER_MAIN)
+        if is_group:
+            await self.safe_send(chat_id, text)
+        else:
+            await self.safe_send(chat_id, text, chat_keypad=kb.USER_MAIN)
 
-    async def cmd_help(self, chat_id: str) -> None:
+    async def cmd_help(self, chat_id: str, is_group: bool = False) -> None:
         text = (
-            "📖 راهنمای دستورات\n\n"
-            "• /start — منوی اصلی\n"
-            "• /help — همین راهنما\n"
-            "• /stats — آمار ربات\n"
-            "• جوک / حافظ — سرگرمی\n"
-            "• /owner — فقط مالک\n"
-            "• /admin — ادمین‌های مجاز\n\n"
-            "دکمه‌های منو هم کار می‌کنن."
+            "📖 راهنمای MEGA BOT روبیکا\n\n"
+            "عمومی:\n"
+            "• /start — شروع\n"
+            "• /help — راهنما\n"
+            "• /stats یا آمار — آمار\n"
+            "• جوک — جوک تصادفی\n"
+            "• حافظ / فال — فال حافظ\n"
+            "• پینگ — تست آنلاین بودن\n"
+            "• آیدی — شناسه شما و چت\n"
+            "• ساعت — ساعت تهران\n"
+            "• درباره / پشتیبانی / تیم\n\n"
+            "مدیریت:\n"
+            "• /owner — پنل مالک\n"
+            "• /admin — پنل ادمین\n\n"
+            "در گروه فقط همین دستورات پاسخ داده می‌شوند."
         )
-        await self.safe_send(chat_id, text, chat_keypad=kb.USER_MAIN)
+        if is_group:
+            await self.safe_send(chat_id, text)
+        else:
+            await self.safe_send(chat_id, text, chat_keypad=kb.USER_MAIN)
 
     async def cmd_about(self, chat_id: str) -> None:
         await self.safe_send(chat_id, ABOUT_TEXT, chat_keypad=kb.USER_MAIN)
@@ -334,8 +395,13 @@ class MegaRubikaBot:
         await self.safe_send(chat_id, f"📜 فال حافظ\n\n{fal}")
 
     async def cmd_owner(self, chat_id: str, user_id: str) -> None:
-        if not self._is_owner(user_id):
-            await self.safe_send(chat_id, "⛔️ فقط مالک.")
+        # همیشه شناسه فرستنده را نشان بده تا OWNER_ID درست ست شود
+        if not self._is_owner(user_id, chat_id):
+            await self.safe_send(
+                chat_id,
+                f"⛔️ فقط مالک.\nشناسه شما: `{user_id or '—'}`\nچت: `{chat_id}`\n"
+                f"OWNER فعلی: `{OWNER_ID}`",
+            )
             return
         text = (
             f"👑 پنل مالک\n"
@@ -345,9 +411,11 @@ class MegaRubikaBot:
         await self.safe_send(chat_id, text, chat_keypad=kb.OWNER_MENU)
 
     async def cmd_admin(self, chat_id: str, user_id: str) -> None:
-        if not self._is_owner(user_id):
-            # بعداً جدول admins چک می‌شود
-            await self.safe_send(chat_id, "دسترسی نداری.")
+        if not self._is_owner(user_id, chat_id):
+            await self.safe_send(
+                chat_id,
+                f"دسترسی نداری.\nشناسه شما: `{user_id or '—'}`",
+            )
             return
         await self.safe_send(chat_id, "🛠 پنل ادمین", chat_keypad=kb.ADMIN_MENU)
 
@@ -411,10 +479,10 @@ class MegaRubikaBot:
             return
 
         # owner buttons
-        if btn.startswith("own_") and self._is_owner(user_id):
+        if btn.startswith("own_") and self._is_owner(user_id, chat_id):
             await self._owner_action(chat_id, user_id, btn)
             return
-        if btn.startswith("adm_") and self._is_owner(user_id):
+        if btn.startswith("adm_") and self._is_owner(user_id, chat_id):
             await self._owner_action(chat_id, user_id, btn)
             return
 
