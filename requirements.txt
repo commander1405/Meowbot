@@ -5,3 +5,8 @@ imageio-ffmpeg
 arabic-reshaper
 python-bidi
 aiofiles
+
+# --- MEGA BOT Rubika (independent) ---
+aiohttp>=3.9
+aiosqlite>=0.19
+python-dotenv>=1.0
