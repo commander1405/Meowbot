@@ -63,37 +63,81 @@ class MegaRubikaBot:
         self._rate[user_id] = now
         return True
 
-    def _extract_message(self, update: dict) -> dict | None:
-        """استخراج پیام از ساختارهای مختلف آپدیت روبیکا."""
-        if "message" in update:
-            return update["message"]
-        if "inline_message" in update:
-            return update["inline_message"]
-        # بعضی پاسخ‌ها مستقیم فیلد دارند
-        if "chat_id" in update and ("text" in update or "aux_data" in update):
-            return update
+    def _normalize_update(self, raw: dict) -> dict | None:
+        """
+        ساختار رسمی روبیکا:
+          { "type": "NewMessage", "chat_id": "...", "new_message": { ... } }
+        یا webhook-style:
+          { "update": { ... } }
+          { "inline_message": { chat_id, sender_id, text, aux_data, ... } }
+        خروجی یکدست: {chat_id, sender_id, text, message_id, button_id, type}
+        """
+        if not isinstance(raw, dict):
+            return None
+
+        # لایه اضافه
+        if "update" in raw and isinstance(raw["update"], dict):
+            raw = raw["update"]
+        if "data" in raw and isinstance(raw["data"], dict) and (
+            "type" in raw["data"] or "new_message" in raw["data"] or "inline_message" in raw["data"]
+        ):
+            raw = raw["data"]
+
+        # inline button / keypad tap
+        if "inline_message" in raw and isinstance(raw["inline_message"], dict):
+            im = raw["inline_message"]
+            aux = im.get("aux_data") or {}
+            return {
+                "chat_id": str(im.get("chat_id") or ""),
+                "sender_id": str(im.get("sender_id") or ""),
+                "text": (im.get("text") or "").strip(),
+                "message_id": str(im.get("message_id") or ""),
+                "button_id": aux.get("button_id") or im.get("button_id"),
+                "type": "InlineMessage",
+            }
+
+        # NewMessage / UpdatedMessage
+        msg = raw.get("new_message") or raw.get("updated_message") or raw.get("message")
+        chat_id = raw.get("chat_id")
+        if isinstance(msg, dict):
+            aux = msg.get("aux_data") or {}
+            return {
+                "chat_id": str(chat_id or msg.get("chat_id") or ""),
+                "sender_id": str(msg.get("sender_id") or ""),
+                "text": (msg.get("text") or "").strip(),
+                "message_id": str(msg.get("message_id") or ""),
+                "button_id": aux.get("button_id") or msg.get("button_id"),
+                "type": str(raw.get("type") or "NewMessage"),
+            }
+
+        # فرم تخت
+        if raw.get("chat_id") and (raw.get("text") is not None or raw.get("aux_data")):
+            aux = raw.get("aux_data") or {}
+            return {
+                "chat_id": str(raw.get("chat_id") or ""),
+                "sender_id": str(raw.get("sender_id") or ""),
+                "text": (raw.get("text") or "").strip(),
+                "message_id": str(raw.get("message_id") or ""),
+                "button_id": aux.get("button_id") or raw.get("button_id"),
+                "type": str(raw.get("type") or "Flat"),
+            }
         return None
 
     def _sender_id(self, msg: dict) -> str:
-        return str(
-            msg.get("sender_id")
-            or msg.get("from", {}).get("user_id")
-            or msg.get("from", {}).get("id")
-            or ""
-        )
+        return str(msg.get("sender_id") or "")
 
     def _chat_id(self, msg: dict) -> str:
-        return str(msg.get("chat_id") or msg.get("chat", {}).get("id") or "")
+        return str(msg.get("chat_id") or "")
 
     def _text(self, msg: dict) -> str:
         return (msg.get("text") or "").strip()
 
     def _button_id(self, msg: dict) -> str | None:
-        aux = msg.get("aux_data") or {}
-        return aux.get("button_id") or msg.get("button_id")
+        return msg.get("button_id") or None
 
     def _message_id(self, msg: dict) -> str | None:
-        return msg.get("message_id") or msg.get("id")
+        mid = msg.get("message_id")
+        return str(mid) if mid else None
 
     async def safe_send(
         self,
@@ -119,41 +163,60 @@ class MegaRubikaBot:
     # ---------- lifecycle ----------
     async def run(self, poll_timeout: int = 25) -> None:
         me = await self.api.get_me()
-        bot_info = me.get("bot") or me.get("data") or me
+        # پاسخ رسمی: { "status": "OK", "data": { "bot": { bot_id, bot_title, ... } } }
+        data = me.get("data") if isinstance(me.get("data"), dict) else me
+        bot_info = data.get("bot") if isinstance(data, dict) and isinstance(data.get("bot"), dict) else data
+        if not isinstance(bot_info, dict):
+            bot_info = {}
         self.bot_id = str(
             bot_info.get("bot_id")
             or bot_info.get("user_id")
             or bot_info.get("id")
             or ""
         )
-        self.bot_name = bot_info.get("title") or bot_info.get("name") or "MEGA BOT"
-        log.info("Bot started: %s (%s)", self.bot_name, self.bot_id or "?")
+        self.bot_name = (
+            bot_info.get("bot_title")
+            or bot_info.get("title")
+            or bot_info.get("name")
+            or "MEGA BOT"
+        )
+        log.info("Bot started: %s (%s) raw_keys=%s", self.bot_name, self.bot_id or "?", list(me.keys())[:8])
         self._running = True
+        empty_polls = 0
         while self._running:
             try:
                 res = await self.api.get_updates(limit=50, offset_id=self._offset)
-                updates = (
-                    res.get("updates")
-                    or res.get("data", {}).get("updates")
-                    or res.get("data")
-                    or []
-                )
+                # { updates, next_offset_id } یا داخل data
+                payload = res.get("data") if isinstance(res.get("data"), dict) else res
+                if not isinstance(payload, dict):
+                    payload = {}
+                updates = payload.get("updates") or res.get("updates") or []
                 if isinstance(updates, dict):
-                    updates = updates.get("updates", [])
+                    updates = updates.get("updates") or []
+                next_off = (
+                    payload.get("next_offset_id")
+                    or res.get("next_offset_id")
+                    or payload.get("offset_id")
+                )
+                if next_off:
+                    self._offset = str(next_off)
+
+                if updates:
+                    empty_polls = 0
+                    log.info("poll: %s update(s) offset=%s", len(updates), self._offset)
+                else:
+                    empty_polls += 1
+                    if empty_polls % 40 == 1:
+                        log.info("poll idle (offset=%s)", self._offset)
+
                 for upd in updates or []:
-                    # offset
-                    oid = (
-                        upd.get("offset_id")
-                        or upd.get("update_id")
-                        or (upd.get("message") or {}).get("message_id")
-                    )
-                    if oid:
-                        self._offset = str(oid)
+                    if not isinstance(upd, dict):
+                        continue
                     try:
                         await self._dispatch(upd)
                     except Exception:
-                        log.exception("dispatch error")
-                await asyncio.sleep(0.35)
+                        log.exception("dispatch error on keys=%s", list(upd.keys())[:12])
+                await asyncio.sleep(0.4)
             except RubikaAPIError as e:
                 log.warning("poll error: %s", e)
                 await asyncio.sleep(2)
@@ -167,15 +230,18 @@ class MegaRubikaBot:
         self._running = False
 
     async def _dispatch(self, update: dict) -> None:
-        msg = self._extract_message(update)
+        msg = self._normalize_update(update)
         if not msg:
+            log.debug("skip update keys=%s", list(update.keys())[:10] if isinstance(update, dict) else type(update))
             return
         chat_id = self._chat_id(msg)
         user_id = self._sender_id(msg)
         text = self._text(msg)
         btn = self._button_id(msg)
         if not chat_id:
+            log.debug("no chat_id in normalized msg: %s", msg)
             return
+        log.info("in chat=%s user=%s text=%r btn=%r", chat_id[:16], (user_id or "")[:16], text[:40], btn)
 
         # ثبت کاربر/گروه
         if user_id:

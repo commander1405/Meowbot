@@ -77,16 +77,20 @@ class RubikaAPI:
                             status=resp.status,
                             payload=body,
                         )
-                    # روبیکا معمولاً status: "OK" یا data برمی‌گرداند
-                    if isinstance(body, dict) and body.get("status") not in (None, "OK", "ok", True):
-                        # بعضی endpointها success flag دارند
-                        if body.get("success") is False:
-                            raise RubikaAPIError(
-                                f"API error on {method}: {self._redact(str(body))}",
-                                payload=body,
-                            )
+                    if not isinstance(body, dict):
+                        self._failures = 0
+                        return {"data": body}
+                    status = body.get("status")
+                    # statusهای موفق رایج روبیکا
+                    if status is not None and str(status).upper() not in (
+                        "OK", "SUCCESS", "200", "TRUE", "1"
+                    ) and body.get("success") is False:
+                        raise RubikaAPIError(
+                            f"API error on {method}: {self._redact(str(body))}",
+                            payload=body,
+                        )
                     self._failures = 0
-                    return body if isinstance(body, dict) else {"data": body}
+                    return body
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_err = e
                 self._failures += 1
