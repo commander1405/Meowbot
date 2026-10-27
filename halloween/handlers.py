@@ -207,9 +207,43 @@ async def _witch_buy(user_id: int, item_id: str):
     skin = await hwdb.get_active_skin(user_id)
     if skin == SKIN_WITCH:
         price = max(1, int(price * 0.9))
-    if not await spend_meow_coins(user_id, price):
-        return await _pair_witch(user_id, f"❌ سکه کافی نیست. قیمت: `{price}`")
-    await add_item(user_id, item_id, meta.get("type") or "hw", 1)
+    from database.pool import get_pool
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                paid = await conn.fetchrow(
+                    """
+                    UPDATE users SET meow_coins = meow_coins - $2, updated_at = NOW()
+                    WHERE user_id = $1 AND meow_coins >= $2
+                    RETURNING meow_coins
+                    """,
+                    int(user_id), int(price),
+                )
+                if not paid:
+                    return await _pair_witch(user_id, f"❌ سکه کافی نیست. قیمت: `{price}`")
+                # inventory upsert inside same tx
+                existing = await conn.fetchrow(
+                    "SELECT quantity FROM inventory WHERE user_id=$1 AND item_id=$2 FOR UPDATE",
+                    int(user_id), item_id,
+                )
+                if existing:
+                    await conn.execute(
+                        "UPDATE inventory SET quantity = quantity + 1 WHERE user_id=$1 AND item_id=$2",
+                        int(user_id), item_id,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        INSERT INTO inventory (user_id, item_id, item_type, quantity, meta)
+                        VALUES ($1,$2,$3,1,'{}'::jsonb)
+                        ON CONFLICT (user_id, item_id) DO UPDATE SET quantity = inventory.quantity + 1
+                        """,
+                        int(user_id), item_id, meta.get("type") or "hw",
+                    )
+    except Exception as e:
+        logger.warning("witch_buy failed: %s", e)
+        return await _pair_witch(user_id, "❌ خطا در خرید.")
     return await _pair_witch(user_id, f"✅ خریدی: {meta['name']} (−{price} 🪙)")
 
 
@@ -409,50 +443,49 @@ def _pumpkin_message(remaining: int, total: int, names: list[str]) -> str:
 
 
 async def _pick_pumpkin(user_id: int, event_id: int, first_name: str = "", bot=None, message=None):
-    # atomic claim
-    ev = await fetchrow(
-        "SELECT * FROM halloween_pumpkins WHERE id=$1 AND active=TRUE AND expires_at > NOW()",
-        int(event_id),
-    )
-    if not ev:
-        return "⌛ این کدوها تمام یا منقضی شدند.", None
-
-    # already claimed?
-    exists = await fetchval(
-        "SELECT 1 FROM halloween_pumpkin_claims WHERE event_id=$1 AND user_id=$2",
-        int(event_id), int(user_id),
-    )
-    if exists:
-        return "⚠️ قبلاً از این دسته کدو برداشتی.", None
-
-    # decrement if remaining > 0
-    row = await fetchrow(
-        """
-        UPDATE halloween_pumpkins
-        SET remaining = remaining - 1,
-            active = CASE WHEN remaining - 1 <= 0 THEN FALSE ELSE TRUE END
-        WHERE id=$1 AND active=TRUE AND remaining > 0 AND expires_at > NOW()
-        RETURNING *
-        """,
-        int(event_id),
-    )
-    if not row:
-        return "⌛ کدوها تمام شدند.", None
-
-    try:
-        await execute(
-            "INSERT INTO halloween_pumpkin_claims (event_id, user_id) VALUES ($1,$2)",
-            int(event_id), int(user_id),
-        )
-    except Exception:
-        # race: refund remaining
-        await execute(
-            "UPDATE halloween_pumpkins SET remaining = remaining + 1, active=TRUE WHERE id=$1",
-            int(event_id),
-        )
-        return "⚠️ قبلاً برداشتی.", None
-
+    # atomic claim: lock pumpkin + insert claim in one transaction
+    from database.pool import get_pool
+    pool = await get_pool()
+    row = None
     bonus = 1
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            ev = await conn.fetchrow(
+                """
+                SELECT * FROM halloween_pumpkins
+                WHERE id=$1 AND active=TRUE AND expires_at > NOW()
+                FOR UPDATE
+                """,
+                int(event_id),
+            )
+            if not ev:
+                return "⌛ این کدوها تمام یا منقضی شدند.", None
+            exists = await conn.fetchval(
+                "SELECT 1 FROM halloween_pumpkin_claims WHERE event_id=$1 AND user_id=$2",
+                int(event_id), int(user_id),
+            )
+            if exists:
+                return "⚠️ قبلاً از این دسته کدو برداشتی.", None
+            row = await conn.fetchrow(
+                """
+                UPDATE halloween_pumpkins
+                SET remaining = remaining - 1,
+                    active = CASE WHEN remaining - 1 <= 0 THEN FALSE ELSE TRUE END
+                WHERE id=$1 AND active=TRUE AND remaining > 0 AND expires_at > NOW()
+                RETURNING *
+                """,
+                int(event_id),
+            )
+            if not row:
+                return "⌛ کدوها تمام شدند.", None
+            try:
+                await conn.execute(
+                    "INSERT INTO halloween_pumpkin_claims (event_id, user_id) VALUES ($1,$2)",
+                    int(event_id), int(user_id),
+                )
+            except Exception:
+                return "⚠️ قبلاً برداشتی.", None
+
     if await hwdb.get_active_skin(user_id) == SKIN_PUMPKIN and random.random() < 0.15:
         bonus = 2
     await add_item(user_id, PUMPKIN_ITEM_ID, "hw", bonus)

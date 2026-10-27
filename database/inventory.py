@@ -89,50 +89,183 @@ async def add_item(user_id: int, item_id: str, item_type: str, quantity: int = 1
 
 
 async def remove_item(user_id: int, item_id: str, quantity: int = 1) -> bool:
-    result = await execute(
+    """Atomic remove. Returns False if not enough quantity (no negative stock)."""
+    row = await fetchrow(
         """
-        UPDATE inventory SET quantity = quantity - $3
+        UPDATE inventory
+        SET quantity = quantity - $3
         WHERE user_id = $1 AND item_id = $2 AND quantity >= $3
+        RETURNING quantity
         """,
         int(user_id), item_id, int(quantity),
     )
-    # asyncpg may return status string
-    await execute(
-        "DELETE FROM inventory WHERE user_id = $1 AND item_id = $2 AND quantity <= 0",
-        int(user_id), item_id,
-    )
+    if not row:
+        return False
+    if int(row["quantity"] or 0) <= 0:
+        await execute(
+            "DELETE FROM inventory WHERE user_id = $1 AND item_id = $2 AND quantity <= 0",
+            int(user_id), item_id,
+        )
     return True
 
 
 async def consume_use(user_id: int, item_id: str, amount: int = 1) -> tuple:
     """
-    یک بار استفاده از آیتم با دوام (uses_left).
-    Returns (ok, uses_left, message)
+    Atomic consume of durable item (uses_left) or quantity-based item.
+    Returns (ok, uses_left, message). Effect must only apply when ok=True.
     """
-    row = await get_inv_item(user_id, item_id)
-    if not row or int(row.get("quantity") or 0) <= 0:
-        return False, 0, "نداری"
-    meta = _meta(row)
-    uses = int(meta.get("uses_left") or 0)
-    if uses <= 0:
-        # آیتم بدون دوام → یک عدد از quantity کم کن
-        await remove_item(user_id, item_id, 1)
-        return True, 0, "مصرف شد"
-    if uses < amount:
-        return False, uses, "مصرف باقی‌مانده کافی نیست"
-    uses -= amount
-    meta["uses_left"] = uses
-    if uses <= 0:
-        await execute(
-            "DELETE FROM inventory WHERE user_id = $1 AND item_id = $2",
-            int(user_id), item_id,
-        )
-        return True, 0, "تموم شد"
-    await execute(
-        "UPDATE inventory SET meta = $3::jsonb WHERE user_id = $1 AND item_id = $2",
-        int(user_id), item_id, json.dumps(meta),
-    )
-    return True, uses, "ok"
+    from .pool import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT * FROM inventory WHERE user_id = $1 AND item_id = $2 FOR UPDATE",
+                int(user_id), item_id,
+            )
+            if not row or int(row.get("quantity") or 0) <= 0:
+                return False, 0, "نداری"
+            meta = _meta(dict(row))
+            uses = meta.get("uses_left")
+            if uses is None:
+                # quantity-based: decrement one
+                q = int(row["quantity"] or 0)
+                if q < 1:
+                    return False, 0, "نداری"
+                if q == 1:
+                    await conn.execute(
+                        "DELETE FROM inventory WHERE user_id = $1 AND item_id = $2",
+                        int(user_id), item_id,
+                    )
+                    return True, 0, "مصرف شد"
+                await conn.execute(
+                    "UPDATE inventory SET quantity = quantity - 1 WHERE user_id = $1 AND item_id = $2",
+                    int(user_id), item_id,
+                )
+                return True, 0, "مصرف شد"
+
+            uses = int(uses or 0)
+            if uses < amount:
+                return False, uses, "مصرف باقی‌مانده کافی نیست"
+            uses -= amount
+            meta["uses_left"] = uses
+            if uses <= 0:
+                await conn.execute(
+                    "DELETE FROM inventory WHERE user_id = $1 AND item_id = $2",
+                    int(user_id), item_id,
+                )
+                return True, 0, "تموم شد"
+            await conn.execute(
+                "UPDATE inventory SET meta = $3::jsonb WHERE user_id = $1 AND item_id = $2",
+                int(user_id), item_id, json.dumps(meta),
+            )
+            return True, uses, "ok"
+
+
+async def purchase_shop_item(user_id: int, item_id: str) -> tuple:
+    """
+    Atomic shop purchase: validate price/stock from DB, charge coins, decrement stock, add inventory.
+    Returns (ok, message, item_dict_or_None).
+    Never charges without granting; never grants without charging.
+    """
+    from .pool import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            item = await conn.fetchrow(
+                "SELECT * FROM shop_items WHERE item_id = $1 AND active = TRUE FOR UPDATE",
+                item_id,
+            )
+            if not item:
+                return False, "❌ آیتم پیدا نشد.", None
+            item = dict(item)
+            price = int(item.get("price") or 0)
+            stock = int(item.get("stock") if item.get("stock") is not None else -1)
+
+            if stock == 0:
+                return False, "❌ این آیتم موجودی ندارد.", None
+
+            # charge coins (row lock user)
+            paid = await conn.fetchrow(
+                """
+                UPDATE users SET meow_coins = meow_coins - $2, updated_at = NOW()
+                WHERE user_id = $1 AND meow_coins >= $2
+                RETURNING meow_coins
+                """,
+                int(user_id), price,
+            )
+            if not paid:
+                return False, f"❌ کوین کافی نیست. قیمت: `{price}`", None
+
+            if stock > 0:
+                dec = await conn.fetchrow(
+                    """
+                    UPDATE shop_items SET stock = stock - 1
+                    WHERE item_id = $1 AND stock > 0
+                    RETURNING stock
+                    """,
+                    item_id,
+                )
+                if not dec:
+                    # rollback via transaction exit — raise to abort
+                    raise RuntimeError("stock_race")
+
+            effect = item.get("effect") or {}
+            if isinstance(effect, str):
+                try:
+                    effect = json.loads(effect)
+                except Exception:
+                    effect = {}
+            effect = dict(effect)
+            max_uses = int(effect.get("max_uses") or 1)
+            if max_uses < 1:
+                max_uses = 1
+            effect["max_uses"] = max_uses
+            effect["uses_left"] = max_uses
+            effect["display_name"] = item.get("name") or item_id
+            item_type = item.get("item_type") or "item"
+
+            existing = await conn.fetchrow(
+                "SELECT * FROM inventory WHERE user_id = $1 AND item_id = $2 FOR UPDATE",
+                int(user_id), item_id,
+            )
+            if existing:
+                old_meta = _meta(dict(existing))
+                if "uses_left" in effect or "uses_left" in old_meta:
+                    old_uses = int(old_meta.get("uses_left") or 0)
+                    add_uses = int(effect.get("uses_left") or max_uses)
+                    new_uses = old_uses + add_uses
+                    max_u = int(effect.get("max_uses") or old_meta.get("max_uses") or new_uses)
+                    new_meta = {**old_meta, **effect, "uses_left": new_uses, "max_uses": max_u}
+                    await conn.execute(
+                        """
+                        UPDATE inventory SET quantity = quantity + 1, meta = $3::jsonb
+                        WHERE user_id = $1 AND item_id = $2
+                        """,
+                        int(user_id), item_id, json.dumps(new_meta),
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE inventory SET quantity = quantity + 1 WHERE user_id = $1 AND item_id = $2",
+                        int(user_id), item_id,
+                    )
+            else:
+                await conn.execute(
+                    """
+                    INSERT INTO inventory (user_id, item_id, item_type, quantity, meta)
+                    VALUES ($1, $2, $3, 1, $4::jsonb)
+                    ON CONFLICT (user_id, item_id) DO UPDATE SET
+                        quantity = inventory.quantity + 1
+                    """,
+                    int(user_id), item_id, item_type, json.dumps(effect),
+                )
+
+            return True, (
+                f"✅ **{item.get('name')}** خریدی!\n"
+                f"📝 {item.get('description') or ''}\n"
+                f"🪙 -{price}\n"
+                f"🔋 تعداد استفاده این بسته: `{max_uses}`\n"
+                f"📦 برو Pet و استفاده کن!"
+            ), item
 
 
 async def find_usable_item(user_id: int, item_type: str):

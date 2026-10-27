@@ -154,12 +154,68 @@ async def get_meow_coins(user_id: int, chat_id=None) -> int:
 async def spend_meow_coins(user_id: int, amount: int = 0, chat_id=None) -> bool:
     result = await execute(
         """
-        UPDATE users SET meow_coins = GREATEST(0, meow_coins - $2), updated_at = NOW()
+        UPDATE users SET meow_coins = meow_coins - $2, updated_at = NOW()
         WHERE user_id = $1 AND meow_coins >= $2
         """,
         int(user_id), int(amount),
     )
-    return result != "UPDATE 0"
+    # asyncpg returns "UPDATE N"
+    return str(result) != "UPDATE 0" and not str(result).endswith(" 0")
+
+
+async def claim_daily_reward_atomic(user_id: int, today: str, reward: int, new_streak: int):
+    """
+    Atomic daily claim for Tehran calendar day.
+    Returns (ok, streak_or_existing, coins_awarded).
+    Only one successful claim per user per day even under concurrent presses.
+    """
+    row = await fetchrow(
+        """
+        UPDATE users SET
+            meow_coins = meow_coins + $3,
+            last_daily = $2,
+            daily_streak = $4,
+            updated_at = NOW()
+        WHERE user_id = $1
+          AND (last_daily IS NULL OR last_daily <> $2)
+        RETURNING daily_streak, meow_coins
+        """,
+        int(user_id), today, int(reward), int(new_streak),
+    )
+    if row:
+        return True, int(row["daily_streak"] or new_streak), int(reward)
+    # already claimed today
+    u = await get_user(user_id)
+    return False, int((u or {}).get("daily_streak") or 0), 0
+
+
+async def try_claim_meow_atomic(user_id: int, now_ts: float, cooldown_sec: float, points: int):
+    """
+    Atomic meow cooldown claim.
+    Updates last_meow + points only if cooldown elapsed.
+    Returns (ok, total_points_after, remaining_sec).
+    """
+    threshold = float(now_ts) - float(cooldown_sec)
+    row = await fetchrow(
+        """
+        UPDATE users SET
+            last_meow = $2,
+            meow_points = meow_points + $3,
+            total_meows = total_meows + 1,
+            updated_at = NOW()
+        WHERE user_id = $1
+          AND (last_meow IS NULL OR last_meow <= $4)
+        RETURNING meow_points, last_meow
+        """,
+        int(user_id), float(now_ts), int(points), float(threshold),
+    )
+    if row:
+        return True, int(row["meow_points"] or 0), 0.0
+    # still in cooldown
+    last = float(await fetchval("SELECT last_meow FROM users WHERE user_id=$1", int(user_id)) or 0)
+    remaining = max(0.0, cooldown_sec - (now_ts - last))
+    pts = int(await fetchval("SELECT meow_points FROM users WHERE user_id=$1", int(user_id)) or 0)
+    return False, pts, remaining
 
 
 async def set_gym_level(user_id: int, level: int = 1, chat_id=None):

@@ -80,19 +80,6 @@ async def register_meow(user_id: int, first_name: str = "", username: str = "", 
         await create_user(user_id, first_name=first_name, username=username, chat_id=chat_id)
         user = await get_user(user_id)
 
-    last = float(user.get("last_meow") or 0)
-    remaining = MEOW_COOLDOWN - (now - last)
-    if remaining > 0:
-        # در کول‌داون هم امتیاز فعلی را نشان بده
-        current = int(user.get("meow_points") or 0)
-        msgs = [
-            f"🐱 هنوز زوده! {format_cooldown(remaining)} دیگه صبر کن 😴\n🐾 میو فعلی‌ات: {current}",
-            f"😼 آروم باش، {format_cooldown(remaining)} تا میوی بعدی مونده!\n🐾 امتیاز فصل: {current}",
-            f"💤 پیشی هنوز داره نفس می‌کشه... {format_cooldown(remaining)}\n🐾 میو فعلی: {current}",
-            f"⏳ Cooldown: {format_cooldown(remaining)}\n🐾 میو فعلی‌ات: {current}",
-        ]
-        return False, random.choice(msgs), 0
-
     points = 1
     event_note = ""
     try:
@@ -100,13 +87,27 @@ async def register_meow(user_id: int, first_name: str = "", username: str = "", 
         points, _mult, event_note = await apply_xp_bonus(points)
     except Exception:
         pass
-    await add_meow_points(user_id, points, chat_id)
-    await set_last_meow(user_id, now, chat_id)
 
-    # امتیاز فعلی بعد از اضافه شدن
-    total = await get_meow_points(user_id)
-    if total is None:
-        total = int(user.get("meow_points") or 0) + points
+    from database.users import try_claim_meow_atomic
+    ok, total, remaining = await try_claim_meow_atomic(
+        int(user_id), now, float(MEOW_COOLDOWN), int(points)
+    )
+    if not ok:
+        msgs = [
+            f"🐱 هنوز زوده! {format_cooldown(remaining)} دیگه صبر کن 😴\n🐾 میو فعلی‌ات: {total}",
+            f"😼 آروم باش، {format_cooldown(remaining)} تا میوی بعدی مونده!\n🐾 امتیاز فصل: {total}",
+            f"💤 پیشی هنوز داره نفس می‌کشه... {format_cooldown(remaining)}\n🐾 میو فعلی: {total}",
+            f"⏳ Cooldown: {format_cooldown(remaining)}\n🐾 میو فعلی‌ات: {total}",
+        ]
+        return False, random.choice(msgs), 0
+
+    # group points only after successful claim
+    if chat_id is not None:
+        try:
+            from database.group_stats import add_group_points
+            await add_group_points(user_id, chat_id, points)
+        except Exception:
+            pass
 
     day = datetime.now(TEHRAN).strftime("%Y-%m-%d")
     try:

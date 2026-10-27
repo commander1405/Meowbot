@@ -78,3 +78,22 @@ async def executemany(query: str, args_list):
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.executemany(query, args_list)
+
+
+async def acquire_connection():
+    """Acquire a raw connection for multi-statement transactions."""
+    pool = await get_pool()
+    return pool.acquire()
+
+
+def _status_ok(status, prefix: str = "UPDATE") -> bool:
+    """True if asyncpg status indicates at least one row affected."""
+    if status is None:
+        return False
+    s = str(status)
+    if not s.startswith(prefix):
+        return True  # INSERT etc.
+    try:
+        return int(s.split()[-1]) > 0
+    except Exception:
+        return s != f"{prefix} 0"

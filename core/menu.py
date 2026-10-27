@@ -191,7 +191,7 @@ async def achieve_text(user_id):
 async def daily_reward(user_id):
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    from database.users import update_user, add_meow_coins
+    from database.users import claim_daily_reward_atomic
     from config import DAILY_REWARD_BASE, DAILY_STREAK_BONUS
     TEHRAN = ZoneInfo("Asia/Tehran")
     today = datetime.now(TEHRAN).strftime("%Y-%m-%d")
@@ -200,15 +200,21 @@ async def daily_reward(user_id):
         return "❌ اول ثبت‌نام کن (یک میو بزن).", back_main_kb()
     if u.get("last_daily") == today:
         return f"🎁 امروز جایزه گرفتی!\n🔥 استریک: `{u.get('daily_streak',0)}`", back_main_kb()
-    streak = int(u.get("daily_streak") or 0) + 1
+    # streak based on previous value; atomic update ensures only one wins
+    prev_streak = int(u.get("daily_streak") or 0)
+    # reset streak if missed a day? current logic always +1 — preserve existing rule
+    streak = prev_streak + 1
     reward = DAILY_REWARD_BASE + (streak - 1) * DAILY_STREAK_BONUS
-    await add_meow_coins(user_id, reward)
-    await update_user(user_id, last_daily=today, daily_streak=streak)
+    ok, streak_out, awarded = await claim_daily_reward_atomic(
+        int(user_id), today, reward, streak
+    )
+    if not ok:
+        return f"🎁 امروز جایزه گرفتی!\n🔥 استریک: `{streak_out}`", back_main_kb()
     return (
         f"🎁 **جایزه روزانه**\n"
         f"━━━━━━━━━━━━━━\n"
-        f"🔥 استریک روز `{streak}`\n"
-        f"🪙 +{reward} Meow Coin\n"
+        f"🔥 استریک روز `{streak_out}`\n"
+        f"🪙 +{awarded} Meow Coin\n"
         f"━━━━━━━━━━━━━━\n"
         f"فردا دوباره بیا!"
     ), back_main_kb()

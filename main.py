@@ -94,8 +94,17 @@ async def _edit_or_reply(target, text, kb=None):
 
 
 
+_ready_lock = False
+_db_ready = False
+
+
 @bot.event
 async def on_ready():
+    global _ready_lock, _db_ready
+    if _ready_lock:
+        print("⚠️ on_ready re-entry ignored (already initializing/ready)")
+        return
+    _ready_lock = True
     print("=" * 55)
     print(f"🐱 {BOT_NAME} v{BOT_VERSION} ONLINE (Glass UI)")
     try:
@@ -103,22 +112,33 @@ async def on_ready():
     except Exception as _pe:
         print(f"⚠️ promo patch: {_pe}")
     print("=" * 55)
+
+    db_ok = False
     try:
         await init_database()
         await seed_achievements()
         await seed_missions()
         await seed_shop()
+        try:
+            from halloween.schema import ensure_halloween_schema
+            await ensure_halloween_schema()
+            print("✅ Halloween schema ready")
+        except Exception as e:
+            print(f"⚠️ Halloween schema (non-fatal): {e}")
+        db_ok = True
+        _db_ready = True
         print("✅ Database + seeds ready")
     except Exception as e:
-        print(f"❌ Database init failed: {e}")
+        _db_ready = False
+        print(f"❌ Database init FAILED — bot is NOT fully operational: {type(e).__name__}: {e}")
         traceback.print_exc()
+        print("=" * 55)
+        return
 
-    try:
-        from halloween.schema import ensure_halloween_schema
-        await ensure_halloween_schema()
-        print("✅ Halloween schema ready")
-    except Exception as e:
-        print(f"⚠️ Halloween schema: {e}")
+    if not db_ok:
+        print("❌ Skipping schedulers — database unavailable")
+        print("=" * 55)
+        return
 
     try:
         from guides.scheduler import start_guide_scheduler
@@ -634,44 +654,16 @@ async def _dispatch(user_id, data: str, first_name="", username="", chat_id=None
 
     if data.startswith("shop:buy:"):
         item_id = data.split(":", 2)[-1]
+        from database.inventory import purchase_shop_item, get_shop_items
+        try:
+            ok, msg, _item = await purchase_shop_item(int(user_id), item_id)
+        except RuntimeError:
+            items = await get_shop_items()
+            return "❌ موجودی این آیتم تمام شد.", shop_kb(items)
         items = await get_shop_items()
-        item = next((i for i in items if i["item_id"] == item_id), None)
-        if not item:
-            return "❌ آیتم پیدا نشد.", back_main_kb()
-        price = int(item["price"])
-        if await get_meow_coins(user_id) < price:
-            return f"❌ کوین کافی نیست. قیمت: `{price}`", shop_kb(items)
-        if not await spend_meow_coins(user_id, price):
-            return "❌ خطا در پرداخت.", shop_kb(items)
-        import json as _json
-        effect = item.get("effect") or {}
-        if isinstance(effect, str):
-            try:
-                effect = _json.loads(effect)
-            except Exception:
-                effect = {}
-        effect = dict(effect)
-        max_uses = int(effect.get("max_uses") or 1)
-        if max_uses < 1:
-            max_uses = 1
-        effect["max_uses"] = max_uses
-        effect["uses_left"] = max_uses
-        effect["display_name"] = item.get("name") or item_id
-        await add_item(
-            user_id,
-            item_id,
-            item.get("item_type") or "item",
-            1,
-            effect,
-        )
-        return (
-            f"✅ **{item.get('name')}** خریدی!\n"
-            f"📝 {item.get('description') or ''}\n"
-            f"🪙 -{price}\n"
-            f"🔋 تعداد استفاده این بسته: `{max_uses}`\n"
-            f"📦 برو Pet و استفاده کن!",
-            shop_kb(items),
-        )
+        if not ok:
+            return msg, shop_kb(items)
+        return msg, shop_kb(items)
 
     if data == "shop:inv":
         from database.inventory import get_inventory, get_shop_item

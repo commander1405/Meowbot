@@ -76,8 +76,28 @@ async def clear_bank_pending(user_id: int):
 
 
 async def bank_transfer(sender_id: int, receiver_id: int, amount: int) -> bool:
-    ok = await update_bank_balance(sender_id, -amount)
-    if not ok:
+    """Atomic transfer: debit sender then credit receiver in one transaction."""
+    if int(amount) <= 0 or int(sender_id) == int(receiver_id):
         return False
-    await update_bank_balance(receiver_id, amount)
-    return True
+    from .pool import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            deb = await conn.fetchrow(
+                """
+                UPDATE banks SET balance = balance - $2
+                WHERE user_id = $1 AND balance >= $2
+                RETURNING balance
+                """,
+                int(sender_id), int(amount),
+            )
+            if not deb:
+                return False
+            await conn.execute(
+                """
+                INSERT INTO banks (user_id, balance) VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET balance = banks.balance + EXCLUDED.balance
+                """,
+                int(receiver_id), int(amount),
+            )
+            return True
