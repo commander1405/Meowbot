@@ -3,6 +3,7 @@
 # ==========================================
 
 import logging
+import json
 import time
 import traceback
 
@@ -21,12 +22,12 @@ from database.admins import is_owner, is_admin, has_permission, get_admin
 from database.logs import log_action
 from database.achievements import seed_achievements
 from database.missions import seed_missions
-from database.inventory import seed_shop, get_shop_items, add_item
+from database.inventory import seed_shop, get_shop_items, add_item, purchase_shop_item, get_inventory, get_shop_item
 from database.users import spend_meow_coins, get_meow_coins
 
 from core.meow import is_meow, is_allowed_group, register_meow
 from core.menu import WELCOME, handle_menu_callback
-from utils.keyboards import main_menu_kb, shop_kb, back_main_kb, shop_cats_kb
+from utils.keyboards import main_menu_kb, shop_kb, back_main_kb, shop_cats_kb, set_panel_owner, reset_panel_owner
 
 
 async def _main_kb():
@@ -254,7 +255,6 @@ async def on_message(message: Message):
         # ---- Start / Menu (Glass) ----
         if text in ("/start", "start", "منو", "شروع", "/menu"):
             try:
-                from utils.keyboards import set_panel_owner, reset_panel_owner
                 _tok = set_panel_owner(int(user_id))
                 try:
                     kb = await _main_kb()
@@ -279,8 +279,7 @@ async def on_message(message: Message):
                 return
             except Exception as e:
                 logger.error(f"/admin error: {e}")
-                import traceback as _tb
-                _tb.print_exc()
+                traceback.print_exc()
                 await message.reply(f"⚠️ خطا در پنل ادمین:\n`{type(e).__name__}: {e}`")
                 return
 
@@ -368,7 +367,6 @@ async def on_message(message: Message):
                     await message.reply(name_text)
                 return
             # صدا زدن Pet در گروه و پیوی → پنل شیشه‌ای (قفل برای همین کاربر)
-            from utils.keyboards import set_panel_owner, reset_panel_owner
             _tok = set_panel_owner(int(user_id))
             try:
                 call = await try_call_pet(int(user_id), text)
@@ -389,8 +387,7 @@ async def on_message(message: Message):
                 return
         except Exception as e:
             logger.error(f"pet name handler error: {e}")
-            import traceback as _tb
-            _tb.print_exc()
+            traceback.print_exc()
             # به Owner خطا را نشان بده تا silent نماند
             try:
                 if int(user_id) == int(OWNER_ID):
@@ -655,11 +652,10 @@ async def _dispatch(user_id, data: str, first_name="", username="", chat_id=None
             "",
         ]
         for it in items:
-            import json as _json
             eff = it.get("effect") or {}
             if isinstance(eff, str):
                 try:
-                    eff = _json.loads(eff)
+                    eff = json.loads(eff)
                 except Exception:
                     eff = {}
             uses = int(eff.get("max_uses") or 1)
@@ -691,7 +687,7 @@ async def _dispatch(user_id, data: str, first_name="", username="", chat_id=None
         return "🛒 **فروشگاه**", shop_kb(items, category=c, page=page)
     if data.startswith("shop:buy:"):
         item_id = data.split(":", 2)[-1]
-        from database.inventory import purchase_shop_item, get_shop_items
+        # purchase_shop_item / get_shop_items: top-level import
         try:
             ok, msg, _item = await purchase_shop_item(int(user_id), item_id)
         except RuntimeError:
@@ -703,8 +699,7 @@ async def _dispatch(user_id, data: str, first_name="", username="", chat_id=None
         return msg, shop_kb(items)
 
     if data == "shop:inv":
-        from database.inventory import get_inventory, get_shop_item
-        import json as _json
+        # get_inventory / get_shop_item / json: top-level
         inv = await get_inventory(user_id)
         if not inv:
             return "🎒 اینونتوری خالی است.\nاز فروشگاه برای Pet بخر!", back_main_kb()
@@ -713,7 +708,7 @@ async def _dispatch(user_id, data: str, first_name="", username="", chat_id=None
             meta = it.get("meta") or {}
             if isinstance(meta, str):
                 try:
-                    meta = _json.loads(meta)
+                    meta = json.loads(meta)
                 except Exception:
                     meta = {}
             name = meta.get("display_name")
@@ -781,7 +776,6 @@ async def on_callback(callback: CallbackQuery):
 
         # قفل پنل: فقط صاحب پنل
         from utils.panel_lock import parse_data, deny_message
-        from utils.keyboards import set_panel_owner, reset_panel_owner
         clean_data, panel_owner = parse_data(data)
         data = clean_data
 

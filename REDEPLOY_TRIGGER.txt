@@ -1,1 +1,1 @@
-redeploy: fix broadcast state NameError 2026-10-27T13:36:04Z
+redeploy: fix shop get_shop_items UnboundLocalError 2026-10-27T14:03:35Z
