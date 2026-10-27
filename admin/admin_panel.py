@@ -107,40 +107,32 @@ async def dashboard(uid: int):
     lines.append("بخش موردنظر را انتخاب کن:")
 
     rows = []
-    # فقط دکمه‌هایی که permission دارند
-    rows.append([("📋 تسک‌های من", "adm:tasks"), ("🏆 پیشرفت من", "adm:progress")])
-    rows.append([("📊 فعالیت من", "adm:myact"), ("👤 پروفایل ادمین", "adm:profile")])
-
+    rows.append([("📋 تسک‌ها", "adm:tasks"), ("🏆 پیشرفت", "adm:progress")])
     row = []
     if await _can(uid, "tickets.manage") or await _can(uid, "tickets.view"):
         n = 0
         try:
             n = await count_open_tickets()
         except Exception:
-            pass
-        row.append((f"🎫 تیکت‌ها ({n})", "adm:tickets"))
+            n = 0
+        row.append((f"🎫 تیکت ({n})", "adm:tickets"))
     if await _can(uid, "users.view"):
         row.append(("👥 کاربران", "adm:users"))
     if row:
         rows.append(row)
-
     row = []
     if await _can(uid, "reports.view") or await _can(uid, "reports.manage"):
         try:
             rn = await count_open_reports()
         except Exception:
             rn = 0
-        row.append((f"🚨 گزارش‌ها ({rn})", "adm:reports"))
+        row.append((f"🚨 گزارش ({rn})", "adm:reports"))
     if await _can(uid, "groups.view") or await _can(uid, "groups.edit"):
         row.append(("💬 گروه‌ها", "adm:groups"))
     if row:
         rows.append(row)
-
-    if await _can(uid, "broadcast.send"):
-        rows.append([("📢 ارسال همگانی", "adm:broadcast")])
-
-    rows.append([("🏅 لیدربورد ادمین", "adm:lb"), ("🔔 اعلان‌ها", "adm:notifs")])
-    rows.append([("⚙️ تنظیمات من", "adm:settings"), ("❌ بستن", "adm:close")])
+    rows.append([("❌ بستن", "adm:close")])
+    # سقف ۷ دکمه
     return "\n".join(lines), _kb(rows)
 
 

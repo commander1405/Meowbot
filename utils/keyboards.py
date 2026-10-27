@@ -1,18 +1,17 @@
 # ==========================================
-# 🪟 Glass UI — Inline Keyboards (Bale-compatible)
+# 🪟 Glass UI — Compact Halloween Keyboards
+# Max 7 visible buttons per private screen
 # ==========================================
-# در python-bale-bot:
-#   markup.add(InlineKeyboardButton(...), row=1)
-# فقط یک دکمه در هر فراخوانی + row عدد طبیعی (>=1)
 
 from bale import InlineKeyboardMarkup, InlineKeyboardButton
-
-# owner برای قفل پنل گروهی (context)
 from contextvars import ContextVar
+
 _panel_owner: ContextVar = ContextVar("panel_owner", default=None)
+
 
 def set_panel_owner(user_id):
     return _panel_owner.set(int(user_id) if user_id is not None else None)
+
 
 def reset_panel_owner(token):
     try:
@@ -20,9 +19,9 @@ def reset_panel_owner(token):
     except Exception:
         pass
 
+
 def get_panel_owner():
     return _panel_owner.get()
-
 
 
 def glass(*rows, owner_id=None) -> InlineKeyboardMarkup:
@@ -35,11 +34,9 @@ def glass(*rows, owner_id=None) -> InlineKeyboardMarkup:
         owner_id = get_panel_owner()
     kb = InlineKeyboardMarkup()
     row_num = 1
-
     for row in rows:
         if not row:
             continue
-
         if (
             isinstance(row, tuple)
             and len(row) == 2
@@ -51,7 +48,6 @@ def glass(*rows, owner_id=None) -> InlineKeyboardMarkup:
             items = list(row)
         else:
             continue
-
         for item in items:
             if not isinstance(item, (list, tuple)) or len(item) < 2:
                 continue
@@ -64,14 +60,11 @@ def glass(*rows, owner_id=None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=text, callback_data=data),
                 row=row_num,
             )
-
         row_num += 1
-
     return kb
 
 
 def glass_url(*rows) -> InlineKeyboardMarkup:
-    """دکمه‌های لینک‌دار — همان قوانین row."""
     kb = InlineKeyboardMarkup()
     row_num = 1
     for row in rows:
@@ -98,19 +91,28 @@ def glass_url(*rows) -> InlineKeyboardMarkup:
     return kb
 
 
-# ---------- Main Menu ----------
-def main_menu_kb():
+def _count_buttons(kb) -> int:
+    """شمارش دکمه برای تست."""
+    try:
+        total = 0
+        for row in getattr(kb, "inline_keyboard", None) or []:
+            total += len(row)
+        return total
+    except Exception:
+        return -1
+
+
+# ---------- Main Menu (≤6 buttons) ----------
+def main_menu_kb(halloween_on: bool = True):
+    """
+    منوی اصلی مینیمال هالووین.
+    1 پروفایل 2 گربه 3 بازی‌ها 4 هالووین/روزانه 5 فروشگاه 6 راهنما
+    """
+    mid = ("👻 هالووین", "hw:home") if halloween_on else ("🎁 روزانه", "menu:daily")
     return glass(
-        [("🐱 میو", "act:meow_info"), ("👤 پروفایل", "menu:profile")],
-        [("🐾 Pet", "pet:home"), ("⚔️ Battle", "battle:home")],
-        [("🏦 بانک", "bank:home"), ("🛒 فروشگاه", "shop:home")],
-        [("🎃 هالووین", "hw:home"), ("🎁 روزانه", "menu:daily")],
-        [("🏆 رنکینگ", "menu:rank"), ("📅 فصل", "menu:season")],
-        [("🎯 مأموریت", "menu:missions"), ("🏅 دستاورد", "menu:achieve")],
-        [("🎮 بازی‌ها", "games:home"), ("📖 راهنما", "menu:guide")],
-        [("ℹ️ درباره", "menu:about"), ("🐛 گزارش باگ", "menu:report")],
-        [("🐱 گپ میو", "menu:global_group"), ("⚙️ تنظیم گروه", "gset:list")],
-        [("🔙 بستن", "menu:close")],
+        [("🎃 پروفایل", "menu:profile"), ("🐈 گربه من", "pet:home")],
+        [("🕯 بازی‌ها", "menu:play"), mid],
+        [("🛍 فروشگاه", "shop:home"), ("📜 راهنما", "menu:help")],
     )
 
 
@@ -120,16 +122,37 @@ def back_main_kb():
     )
 
 
-def profile_kb():
+def help_kb():
     return glass(
-        [("🔄 بروزرسانی", "menu:profile"), ("🐾 Pet من", "pet:home")],
-        [("🏦 بانک", "bank:home"), ("⚔️ Battle", "battle:home")],
-        [("🏆 رنکینگ", "menu:rank"), ("🎯 مأموریت", "menu:missions")],
+        [("📖 راهنما", "menu:guide"), ("ℹ️ درباره", "menu:about")],
+        [("🎁 روزانه", "menu:daily"), ("🐛 گزارش", "menu:report")],
+        [("🐱 گپ میو", "menu:global_group")],
         [("🏠 منوی اصلی", "menu:main")],
     )
 
 
-# ---------- Pet ----------
+def play_hub_kb():
+    """هاب بازی و اقتصاد — ۶ دکمه + بازگشت."""
+    return glass(
+        [("⚔️ نبرد", "battle:home"), ("🎮 مینی‌گیم", "games:home")],
+        [("🏦 بانک", "bank:home"), ("🏆 رنکینگ", "menu:rank")],
+        [("🎯 مأموریت", "menu:missions"), ("🏅 دستاورد", "menu:achieve")],
+        [("🏠 منوی اصلی", "menu:main")],
+    )
+
+
+def profile_kb(halloween_on: bool = True):
+    rows = [
+        [("🔄 بروزرسانی", "menu:profile"), ("🐈 گربه من", "pet:home")],
+        [("🏦 بانک", "bank:home"), ("🏆 رنکینگ", "menu:rank")],
+    ]
+    if halloween_on:
+        rows.append([("👻 هالووین", "hw:home")])
+    rows.append([("🏠 منوی اصلی", "menu:main")])
+    return glass(*rows)
+
+
+# ---------- Pet (≤7) ----------
 def pet_home_kb(has_pet=True, awaiting=False):
     if awaiting:
         return glass(
@@ -138,15 +161,22 @@ def pet_home_kb(has_pet=True, awaiting=False):
         )
     if not has_pet:
         return glass(
-            [("✨ ساخت Pet جدید", "pet:create")],
+            [("✨ ساخت گربه جدید", "pet:create")],
             [("🏠 منوی اصلی", "menu:main")],
         )
     return glass(
         [("🍖 غذا", "pet:feed"), ("🎾 بازی", "pet:play_menu")],
-        [("🫶 نوازش", "pet:pet"), ("💤 خواب", "pet:sleep")],
-        [("🎁 هدیه", "pet:gift"), ("📊 وضعیت", "pet:status")],
-        [("⬆️ ارتقا لول", "pet:levelup"), ("✏️ تغییر نام", "pet:rename")],
+        [("💤 خواب", "pet:sleep"), ("🎁 هدیه", "pet:gift")],
+        [("📊 وضعیت", "pet:status"), ("⚙️ بیشتر", "pet:more")],
         [("🏠 منوی اصلی", "menu:main")],
+    )
+
+
+def pet_more_kb():
+    return glass(
+        [("🫶 نوازش", "pet:pet"), ("⬆️ ارتقا", "pet:levelup")],
+        [("✏️ تغییر نام", "pet:rename")],
+        [("🔙 برگشت", "pet:home")],
     )
 
 
@@ -154,16 +184,16 @@ def pet_play_kb():
     return glass(
         [("🎾 توپ", "pet:play:ball"), ("🧶 نخ", "pet:play:yarn")],
         [("🔴 لیزر", "pet:play:laser")],
-        [("🔙 برگشت به Pet", "pet:home")],
+        [("🔙 برگشت", "pet:home")],
     )
 
 
 # ---------- Battle ----------
 def battle_home_kb():
     return glass(
-        [("⚔️ ورود به صف نبرد", "battle:queue")],
-        [("🚪 خروج از صف", "battle:leave_queue")],
-        [("🏋️ باشگاه من", "battle:gym"), ("📊 آمار نبرد", "battle:home")],
+        [("⚔️ ورود به صف", "battle:queue"), ("🚪 خروج از صف", "battle:leave_queue")],
+        [("🏋️ باشگاه", "battle:gym"), ("📊 آمار", "battle:home")],
+        [("🕯 بازی‌ها", "menu:play")],
         [("🏠 منوی اصلی", "menu:main")],
     )
 
@@ -171,7 +201,7 @@ def battle_home_kb():
 def gym_kb():
     return glass(
         [("⬆️ ارتقا باشگاه", "battle:gym_up")],
-        [("⚔️ برگشت به Battle", "battle:home")],
+        [("⚔️ نبرد", "battle:home")],
         [("🏠 منوی اصلی", "menu:main")],
     )
 
@@ -185,8 +215,7 @@ def bank_home_kb(has_bank=True):
         )
     return glass(
         [("📥 واریز", "bank:deposit"), ("📤 برداشت", "bank:withdraw")],
-        [("💸 انتقال", "bank:transfer"), ("📋 تاریخچه", "bank:history")],
-        [("💳 کارت من", "bank:card"), ("🔄 بروزرسانی", "bank:home")],
+        [("💸 انتقال", "bank:transfer"), ("💳 کارت", "bank:card")],
         [("🏠 منوی اصلی", "menu:main")],
     )
 
@@ -198,16 +227,52 @@ def bank_cancel_kb():
     )
 
 
-# ---------- Shop ----------
-def shop_kb(items):
+# ---------- Shop (category + ≤5 items per page) ----------
+def shop_kb(items, category: str | None = None, page: int = 0):
+    """حداکثر ۵ آیتم + ناوبری ≤۷ دکمه."""
+    filtered = list(items or [])
+    if category:
+        filtered = [i for i in filtered if (i.get("item_type") or "") == category]
+    page_size = 5
+    start = page * page_size
+    chunk = filtered[start: start + page_size]
     rows = []
-    for it in (items or [])[:12]:
+    for it in chunk:
         name = it.get("name") or it.get("item_id") or "?"
         price = it.get("price", 0)
         item_id = it.get("item_id") or "x"
-        rows.append([(f"🛒 {name} — {price}🪙", f"shop:buy:{item_id}")])
-    rows.append([("🎒 اینونتوری", "shop:inv"), ("🏠 منوی اصلی", "menu:main")])
+        # کوتاه‌کردن برچسب
+        label = f"{name} · {price}🪙"
+        if len(label) > 28:
+            label = label[:26] + "…"
+        rows.append([(label, f"shop:buy:{item_id}")])
+    nav = []
+    if start > 0:
+        nav.append(("◀️", f"shop:page:{category or 'all'}:{page - 1}"))
+    if start + page_size < len(filtered):
+        nav.append(("▶️", f"shop:page:{category or 'all'}:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([("📂 دسته‌ها", "shop:cats"), ("🎒 کیف", "shop:inv")])
+    rows.append([("🏠 منوی اصلی", "menu:main")])
+    # برش سخت ≤۷
+    flat = []
+    for r in rows:
+        flat.extend(r)
+    if len(flat) > 7:
+        # اولویت: آیتم‌ها + منوی اصلی
+        rows = rows[:5]
+        rows.append([("🏠 منوی اصلی", "menu:main")])
     return glass(*rows)
+
+
+def shop_cats_kb():
+    return glass(
+        [("🥣 غذا", "shop:cat:food"), ("🎾 اسباب‌بازی", "shop:cat:toy")],
+        [("🛏 جای‌خواب", "shop:cat:bed"), ("🎁 هدیه", "shop:cat:gift")],
+        [("🛒 همه", "shop:home")],
+        [("🏠 منوی اصلی", "menu:main")],
+    )
 
 
 # ---------- Games ----------
@@ -215,6 +280,7 @@ def games_kb():
     return glass(
         [("🎲 حدس عدد", "games:guess"), ("❓ کوییز", "games:quiz")],
         [("🐱 کوییز گربه", "games:catquiz"), ("⚡ ری‌اکشن", "games:reaction")],
+        [("🕯 بازی‌ها", "menu:play")],
         [("🏠 منوی اصلی", "menu:main")],
     )
 
@@ -222,23 +288,17 @@ def games_kb():
 # ---------- Ranking ----------
 def rank_kb():
     return glass(
-        [("🐾 امتیاز فصل", "rank:points"), ("🪙 سکه", "rank:coins")],
-        [("⚔️ برد نبرد", "rank:wins"), ("🏋️ باشگاه", "rank:gym")],
+        [("🐾 امتیاز", "rank:points"), ("🪙 سکه", "rank:coins")],
+        [("⚔️ برد", "rank:wins"), ("🏋️ باشگاه", "rank:gym")],
         [("🏠 منوی اصلی", "menu:main")],
     )
 
 
-# ---------- Owner ----------
+# ---------- Owner compact ----------
 def owner_nav_kb():
     return glass(
-        [("📊 Dashboard", "owner:dashboard"), ("🖥 Status", "owner:status")],
-        [("🧪 Tests", "owner:tests"), ("📡 Ping", "owner:ping")],
-        [("👥 Users", "owner:users"), ("🔍 Find User", "owner:user_find")],
-        [("💬 Groups", "owner:groups"), ("🛡 Admins", "owner:admins")],
-        [("💰 Economy", "owner:economy"), ("🐾 Pets", "owner:pets")],
-        [("⚔️ Battles", "owner:battles"), ("📅 Seasons", "owner:seasons")],
-        [("💡 Guides", "owner:guides"), ("📢 Broadcast", "owner:broadcast")],
-        [("📜 Logs", "owner:logs"), ("💾 Backup", "owner:backup")],
-        [("⚙️ Settings", "owner:settings"), ("🚧 Maintenance", "owner:maint")],
+        [("📊 وضعیت", "owner:status"), ("👥 مدیریت", "owner:mgmt")],
+        [("🎁 اقتصاد", "owner:economy"), ("⚙️ تنظیمات", "owner:settings_hub")],
+        [("🎃 رویداد", "owner:halloween")],
         [("🔙 بستن", "owner:close")],
     )

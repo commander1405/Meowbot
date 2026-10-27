@@ -41,9 +41,9 @@ def _kb(rows) -> InlineKeyboardMarkup:
 
 def halloween_home_kb():
     return _kb([
-        [("🧙 جادوگر", "hw:witch"), ("🎡 گردونه روزانه", "hw:wheel")],
-        [("🍫 شکلات شبانه", "hw:choc"), ("🎭 اسکین گربه", "hw:skins")],
-        [("📊 آمار هالووین", "hw:stats"), ("ℹ️ وضعیت ایونت", "hw:status")],
+        [("🧙 جادوگر", "hw:witch"), ("🎡 گردونه", "hw:wheel")],
+        [("🍫 شکلات", "hw:choc"), ("🎭 اسکین", "hw:skins")],
+        [("📊 آمار", "hw:stats")],
         [("🏠 منوی اصلی", "menu:main")],
     ])
 
@@ -66,6 +66,10 @@ async def handle_hw_callback(user_id: int, data: str, first_name: str = "", chat
         return None
 
     action = data.split(":", 1)[1]
+    # پس از خاموشی Owner فقط status/home پیام پایان می‌دهد
+    if action not in ("status", "home", "menu") and not event_active():
+        from utils.keyboards import main_menu_kb
+        return "🔇 ایونت هالووین خاموش است.", main_menu_kb(halloween_on=False)
 
     if action in ("home", "menu"):
         return halloween_menu_text(user_id), halloween_home_kb()

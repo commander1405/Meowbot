@@ -107,3 +107,58 @@ class TestAtomicSQLSemantics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUIButtonLimits(unittest.TestCase):
+    """Max 7 buttons on redesigned private keyboards."""
+
+    @classmethod
+    def setUpClass(cls):
+        import types, sys
+        if "bale" not in sys.modules:
+            class Markup:
+                def __init__(self):
+                    self.rows = {}
+                def add(self, btn, row=1):
+                    self.rows.setdefault(row, []).append(btn)
+                @property
+                def inline_keyboard(self):
+                    return [self.rows[k] for k in sorted(self.rows)]
+            class Button:
+                def __init__(self, text="", callback_data="", url=None):
+                    self.text, self.callback_data, self.url = text, callback_data, url
+            bale = types.ModuleType("bale")
+            bale.InlineKeyboardMarkup = Markup
+            bale.InlineKeyboardButton = Button
+            sys.modules["bale"] = bale
+            pl = types.ModuleType("utils.panel_lock")
+            pl.tag_data = lambda d, o: d
+            sys.modules["utils.panel_lock"] = pl
+
+    def _count(self, kb):
+        return sum(len(r) for r in kb.inline_keyboard)
+
+    def test_main_and_hubs(self):
+        from utils import keyboards as k
+        for name, kb in {
+            "main_on": k.main_menu_kb(True),
+            "main_off": k.main_menu_kb(False),
+            "help": k.help_kb(),
+            "play": k.play_hub_kb(),
+            "profile": k.profile_kb(True),
+            "pet": k.pet_home_kb(True),
+            "battle": k.battle_home_kb(),
+            "bank": k.bank_home_kb(True),
+            "games": k.games_kb(),
+            "rank": k.rank_kb(),
+            "owner": k.owner_nav_kb(),
+            "shop_cats": k.shop_cats_kb(),
+        }.items():
+            n = self._count(kb)
+            self.assertLessEqual(n, 7, f"{name} has {n} buttons")
+
+    def test_event_settings_has_toggle_api(self):
+        src = open(os.path.join(ROOT, "halloween/event_settings.py"), encoding="utf-8").read()
+        self.assertIn("set_event_enabled", src)
+        self.assertIn("refresh_event_flag", src)
+        self.assertIn("SETTING_KEY", src)

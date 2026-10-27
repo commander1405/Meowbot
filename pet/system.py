@@ -19,7 +19,7 @@ from config import (
 )
 from database.pets import get_pet, create_pet, update_pet, pet_exists
 from database.users import get_user, create_user, get_meow_coins, spend_meow_coins, add_meow_points, add_meow_coins
-from utils.keyboards import glass,  pet_home_kb, pet_play_kb, back_main_kb
+from utils.keyboards import glass, pet_home_kb, pet_more_kb, pet_play_kb, back_main_kb
 
 FEED_MESSAGES = [
     "🐱 {name} با ذوق غذاشو خورد! 😋",
@@ -600,6 +600,9 @@ async def handle_pet_callback(user_id, data: str, first_name="", username=""):
         await delete_pet(user_id)
         return "🗑️ Pet حذف شد.", pet_home_kb(False, False)
 
+
+    if data == "pet:more":
+        return "⚙️ گزینه‌های بیشتر گربه:", pet_more_kb()
 
     if data == "pet:status":
         pet, text, kb = await get_or_create_flow(user_id)

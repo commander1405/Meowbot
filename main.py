@@ -26,7 +26,16 @@ from database.users import spend_meow_coins, get_meow_coins
 
 from core.meow import is_meow, is_allowed_group, register_meow
 from core.menu import WELCOME, handle_menu_callback
-from utils.keyboards import main_menu_kb, shop_kb, back_main_kb
+from utils.keyboards import main_menu_kb, shop_kb, back_main_kb, shop_cats_kb
+
+
+async def _main_kb():
+    try:
+        from halloween.event_settings import event_active
+        return main_menu_kb(halloween_on=event_active())
+    except Exception:
+        return main_menu_kb(halloween_on=True)
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("meowbot")
@@ -123,6 +132,12 @@ async def on_ready():
             from halloween.schema import ensure_halloween_schema
             await ensure_halloween_schema()
             print("✅ Halloween schema ready")
+            try:
+                from halloween.event_settings import refresh_event_flag
+                on = await refresh_event_flag()
+                print(f"🎃 Halloween enabled={on}")
+            except Exception as _he:
+                print(f"⚠️ Halloween flag: {_he}")
         except Exception as e:
             print(f"⚠️ Halloween schema (non-fatal): {e}")
         db_ok = True
@@ -236,7 +251,7 @@ async def on_message(message: Message):
                 from utils.keyboards import set_panel_owner, reset_panel_owner
                 _tok = set_panel_owner(int(user_id))
                 try:
-                    kb = main_menu_kb()
+                    kb = await _main_kb()
                 finally:
                     reset_panel_owner(_tok)
                 await message.reply(WELCOME, components=kb)
@@ -440,7 +455,7 @@ async def on_message(message: Message):
                     ok, o, n = await admin_set_gym_level(tid, max(1, min(MAX_GYM_LEVEL, old + delta)))
                     field = "🏋️"
                 await log_action(user_id, cmd, str(tid), {"delta": delta, "old": o, "new": n})
-                await message.reply(f"✅ {field} `{tid}`\n{o} → {n}", components=main_menu_kb())
+                await message.reply(f"✅ {field} `{tid}`\n{o} → {n}", components=await _main_kb())
                 return
 
 
@@ -513,7 +528,7 @@ async def on_message(message: Message):
             ok, msg, pts = await register_meow(int(user_id), first_name, username, chat_id)
             # در گروه کیبورد اصلی شلوغ است — بدون منو جواب بده
             if private:
-                await message.reply(msg, components=main_menu_kb())
+                await message.reply(msg, components=await _main_kb())
             else:
                 await message.reply(msg)
                 # شانس اسپان هالووین در گروه (کدو / باس)
@@ -556,12 +571,12 @@ async def on_message(message: Message):
         if text in ("interaction on", "اینترکشن روشن", "/interaction_on"):
             if await has_permission(user_id, "groups.edit") or await is_owner(user_id):
                 await set_interaction(chat_id, True)
-                await message.reply("✅ Interaction روشن شد.", components=main_menu_kb())
+                await message.reply("✅ Interaction روشن شد.", components=await _main_kb())
             return
         if text in ("interaction off", "اینترکشن خاموش", "/interaction_off"):
             if await has_permission(user_id, "groups.edit") or await is_owner(user_id):
                 await set_interaction(chat_id, False)
-                await message.reply("🔇 Interaction خاموش (Guide مستقل است).", components=main_menu_kb())
+                await message.reply("🔇 Interaction خاموش (Guide مستقل است).", components=await _main_kb())
             return
 
     except Exception as e:
@@ -652,6 +667,22 @@ async def _dispatch(user_id, data: str, first_name="", username="", chat_id=None
             lines.append("")
         return "\n".join(lines).rstrip(), shop_kb(items)
 
+    if data == "shop:cats":
+        return "📂 **دسته‌بندی فروشگاه**", shop_cats_kb()
+    if data.startswith("shop:cat:"):
+        cat = data.split(":")[-1]
+        items = await get_shop_items()
+        return "🛒 **فروشگاه** — " + cat, shop_kb(items, category=cat, page=0)
+    if data.startswith("shop:page:"):
+        parts = data.split(":")
+        cat = parts[2] if len(parts) > 2 else "all"
+        try:
+            page = int(parts[3]) if len(parts) > 3 else 0
+        except Exception:
+            page = 0
+        items = await get_shop_items()
+        c = None if cat in ("all", "") else cat
+        return "🛒 **فروشگاه**", shop_kb(items, category=c, page=page)
     if data.startswith("shop:buy:"):
         item_id = data.split(":", 2)[-1]
         from database.inventory import purchase_shop_item, get_shop_items
@@ -694,7 +725,7 @@ async def _dispatch(user_id, data: str, first_name="", username="", chat_id=None
                 lines.append(f"• **{name}** ×{it.get('quantity')}")
         return "\n".join(lines), back_main_kb()
 
-    return WELCOME, main_menu_kb()
+    return WELCOME, await _main_kb()
 
 
 @bot.event
@@ -786,7 +817,7 @@ async def on_callback(callback: CallbackQuery):
 
         if not data:
             if msg is not None:
-                await _edit_or_reply(msg, "⚠️ دکمه بدون داده.", main_menu_kb())
+                await _edit_or_reply(msg, "⚠️ دکمه بدون داده.", await _main_kb())
             return
 
         # ثبت کاربر
@@ -1037,11 +1068,11 @@ async def on_callback(callback: CallbackQuery):
         if isinstance(result, tuple) and len(result) >= 2:
             text, kb = result[0], result[1]
         elif isinstance(result, tuple) and len(result) == 1:
-            text, kb = result[0], main_menu_kb()
+            text, kb = result[0], await _main_kb()
         elif isinstance(result, str):
-            text, kb = result, main_menu_kb()
+            text, kb = result, await _main_kb()
         else:
-            text, kb = WELCOME, main_menu_kb()
+            text, kb = WELCOME, await _main_kb()
 
         # Group pumpkin/boss handlers may already have edited the message (kb is None + short ack)
         if data.startswith("hw:") and (kb is None or text is None):

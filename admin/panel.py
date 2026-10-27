@@ -60,24 +60,48 @@ def _kb(rows):
 
 
 def nav():
-    """منوی اصلی Owner."""
+    """منوی اصلی Owner — حداکثر ۶ دکمه."""
     return _kb([
-        [("📊 Dashboard", "owner:dashboard"), ("🖥 Status", "owner:status")],
-        [("🧪 Tests", "owner:tests"), ("📡 Ping", "owner:ping")],
-        [("👥 Users", "owner:users"), ("📋 لیست کاربران", "owner:um_list")],
-        [("🔍 Find User", "owner:user_find"), ("🎫 تیکت‌ها", "owner:tickets")],
-        [("💬 Groups", "owner:groups"), ("⚙️ Group Set", "owner:group_set")],
-        [("🛡 Admins", "owner:admins"), ("➕ Add Admin", "owner:admin_add")],
-        [("💰 Economy", "owner:economy"), ("🐾 Pets", "owner:pets")],
-        [("⚔️ Battles", "owner:battles"), ("🎮 Games", "owner:games")],
-        [("💡 Guides", "owner:guides"), ("🎯 Missions", "owner:missions")],
-        [("🏆 Achievements", "owner:achievements"), ("📅 Seasons", "owner:seasons")],
-        [("🎉 Events", "owner:events"), ("📢 Broadcast", "owner:broadcast")],
-        [("💬 Msg Admin", "owner:msg_admin"), ("📜 Logs", "owner:logs")],
-        [("💾 Backup", "owner:backup"), ("⚙️ Settings", "owner:settings")],
-        [("🐛 گزارش‌ها", "owner:reports"), ("🌍 گروه جهانی", "owner:global_group")],
-        [("🎯 تسک ادمین", "owner:admin_tasks"), ("🛡 دسترسی ادمین", "owner:admins")],
-        [("🚧 Maintenance", "owner:maint"), ("🔙 بستن", "owner:close")],
+        [("📊 وضعیت", "owner:status"), ("👥 مدیریت", "owner:mgmt")],
+        [("🎁 اقتصاد", "owner:economy"), ("⚙️ تنظیمات", "owner:settings_hub")],
+        [("🎃 رویداد", "owner:halloween")],
+        [("🔙 بستن", "owner:close")],
+    ])
+
+
+def mgmt_kb():
+    return _kb([
+        [("🔍 کاربر", "owner:user_find"), ("📋 لیست کاربران", "owner:um_list")],
+        [("💬 گروه‌ها", "owner:groups"), ("🛡 ادمین‌ها", "owner:admins")],
+        [("🎫 تیکت‌ها", "owner:tickets"), ("🐛 گزارش‌ها", "owner:reports")],
+        [("🔙 منوی Owner", "owner:home")],
+    ])
+
+
+def settings_hub_kb():
+    return _kb([
+        [("📅 فصول", "owner:seasons"), ("💡 راهنماها", "owner:guides")],
+        [("📢 همگانی", "owner:broadcast"), ("💾 بکاپ", "owner:backup")],
+        [("🌍 گروه جهانی", "owner:global_group"), ("🚧 نگهداری", "owner:maint")],
+        [("🔙 منوی Owner", "owner:home")],
+    ])
+
+
+async def halloween_owner_kb():
+    from halloween.event_settings import event_active, event_status_text
+    on = event_active()
+    toggle = ("🎃 خاموش‌کردن هالووین", "owner:hw_off_ask") if on else ("👻 فعال‌کردن هالووین", "owner:hw_on")
+    return _kb([
+        [toggle],
+        [("ℹ️ وضعیت", "owner:halloween")],
+        [("🔙 منوی Owner", "owner:home")],
+    ])
+
+
+def halloween_confirm_off_kb():
+    return _kb([
+        [("🔴 بله، غیرفعال کن", "owner:hw_off_yes")],
+        [("🔙 انصراف", "owner:halloween")],
     ])
 
 
@@ -161,14 +185,18 @@ def uptime_str():
 
 
 async def show_owner_panel(message):
+    try:
+        from halloween.event_settings import event_status_text
+        hw = event_status_text()
+    except Exception:
+        hw = "—"
     text = (
-        f"👑 **{BOT_NAME} OWNER PANEL**\n"
+        f"👑 **پنل مالک**\n"
         f"━━━━━━━━━━━━━━\n"
-        f"🛡 نسخه: `{BOT_VERSION}`\n"
-        f"⏱ Uptime: `{uptime_str()}`\n"
-        f"🕒 تهران: `{datetime.now(TEHRAN).strftime('%Y-%m-%d %H:%M')}`\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"یکی از بخش‌ها را انتخاب کن 👇"
+        f"نسخه `{BOT_VERSION}` · ⏱ `{uptime_str()}`\n"
+        f"🕒 `{datetime.now(TEHRAN).strftime('%Y-%m-%d %H:%M')}`\n"
+        f"{hw}\n"
+        f"━━━━━━━━━━━━━━"
     )
     await message.reply(text, components=nav())
 
@@ -177,6 +205,58 @@ async def handle_owner_callback(bot, callback, data: str):
     action = data.split(":", 1)[1] if ":" in data else data
     msg = callback.message
     user_id = int(callback.from_user.id) if callback.from_user else 0
+
+    # --- compact hubs + Halloween toggle (owner-only; caller already checks) ---
+    if action in ("home", ""):
+        try:
+            from halloween.event_settings import event_status_text
+            hw = event_status_text()
+        except Exception:
+            hw = "—"
+        text = (
+            f"👑 **پنل مالک**\n━━━━━━━━━━━━━━\n"
+            f"نسخه `{BOT_VERSION}` · ⏱ `{uptime_str()}`\n"
+            f"{hw}\n━━━━━━━━━━━━━━"
+        )
+        await _edit(msg, text, nav())
+        return
+    if action == "mgmt":
+        await _edit(msg, "👥 **مدیریت**\nکاربران، گروه‌ها، ادمین، تیکت.", mgmt_kb())
+        return
+    if action == "settings_hub":
+        await _edit(msg, "⚙️ **تنظیمات**\nفصل، راهنما، همگانی، بکاپ.", settings_hub_kb())
+        return
+    if action == "halloween":
+        try:
+            from halloween.event_settings import event_status_text
+            st = event_status_text()
+        except Exception:
+            st = "—"
+        kb = await halloween_owner_kb()
+        await _edit(msg, f"🎃 **رویداد هالووین**\n{st}\nداده کاربران پاک نمی‌شود.", kb)
+        return
+    if action == "hw_off_ask":
+        await _edit(
+            msg,
+            "⚠️ **غیرفعال‌کردن هالووین**\n"
+            "اسپان کدو/باس، گردونه، شکلات و فروش جادوگر متوقف می‌شود.\n"
+            "پیشرفت و آیتم‌های قبلی حفظ می‌شوند.",
+            halloween_confirm_off_kb(),
+        )
+        return
+    if action == "hw_off_yes":
+        from halloween.event_settings import set_event_enabled
+        await set_event_enabled(False)
+        kb = await halloween_owner_kb()
+        await _edit(msg, "🔇 هالووین خاموش شد.\nمنوی کاربران به حالت عادی برگشت.", kb)
+        return
+    if action == "hw_on":
+        from halloween.event_settings import set_event_enabled
+        await set_event_enabled(True)
+        kb = await halloween_owner_kb()
+        await _edit(msg, "🎃 هالووین دوباره فعال شد.", kb)
+        return
+
 
     try:
         await callback.answer()

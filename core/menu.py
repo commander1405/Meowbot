@@ -5,6 +5,7 @@
 from config import BOT_NAME, BOT_VERSION, SEASON_DAYS
 from utils.keyboards import (
     main_menu_kb, profile_kb, rank_kb, back_main_kb, games_kb,
+    help_kb, play_hub_kb,
 )
 from database.users import get_user, get_top_users, get_dashboard_stats
 from database.seasons import get_active_season
@@ -14,9 +15,9 @@ from database.pets import get_pet
 
 
 WELCOME = (
-    f"🐱 سلام! به **{BOT_NAME}** خوش اومدی\n"
+    f"🎃 **MeowBot** — شب‌های نفرین‌شده\n"
     f"━━━━━━━━━━━━━━\n"
-    f"از دکمه‌های شیشه‌ای زیر استفاده کن ✨\n"
+    f"از منوی زیر انتخاب کن.\n"
     f"نسخه `{BOT_VERSION}`"
 )
 
@@ -30,19 +31,14 @@ ABOUT = (
 )
 
 GUIDE = (
-    "📖 **راهنما**\n"
+    "📜 **راهنما**\n"
     "━━━━━━━━━━━━━━\n"
-    "🐱 بنویس **میو** → امتیاز فصل\n"
-    "👤 **پروفایل** از منو\n"
-    "🐾 **Pet** بساز و مراقبت کن\n"
-    "⚔️ **Battle** با بقیه\n"
-    "🏦 **بانک** واریز/برداشت/انتقال\n"
-    "🎮 **بازی‌ها** و کوین جایزه\n"
-    "🎃 **هالووین**: کدو در گروه، باس روح، جادوگر، گردونه، شکلات شبانه\n"
-    "📅 فصل‌ها ۱۵ روزه‌اند؛ فقط رنکینگ فصل ریست می‌شود\n"
-    "💡 راهنمای خودکار هر ساعت در گروه\n"
-    "━━━━━━━━━━━━━━\n"
-    "تقریباً همه‌چیز با دکمه انجام می‌شود 🪟"
+    "🐱 در گروه بنویس **میو** → امتیاز\n"
+    "🐈 گربه بساز و مراقبت کن\n"
+    "⚔️ نبرد و 🎮 مینی‌گیم از **بازی‌ها**\n"
+    "🛍 فروشگاه و 🏦 بانک برای اقتصاد\n"
+    "👻 در ایونت: کدو، باس، جادوگر، گردونه\n"
+    "━━━━━━━━━━━━━━"
 )
 
 
@@ -222,7 +218,12 @@ async def daily_reward(user_id):
 
 async def handle_menu_callback(user_id, data, first_name="", chat_id=None, private=True):
     if data == "menu:main":
-        return WELCOME, main_menu_kb()
+        try:
+            from halloween.event_settings import event_active
+            kb = main_menu_kb(halloween_on=event_active())
+        except Exception:
+            kb = main_menu_kb()
+        return WELCOME, kb
     if data == "menu:close":
         return "🐱 منو بسته شد. هر وقت خواستی /start بزن!", None
     if data == "menu:profile":
@@ -281,6 +282,18 @@ async def handle_menu_callback(user_id, data, first_name="", chat_id=None, priva
         return await achieve_text(user_id)
     if data == "menu:daily":
         return await daily_reward(user_id)
+    if data == "menu:play":
+        return (
+            "🕯 **بازی‌ها و اقتصاد**\n"
+            "━━━━━━━━━━━━━━\n"
+            "نبرد، مینی‌گیم، بانک، رنکینگ و مأموریت."
+        ), play_hub_kb()
+    if data == "menu:help":
+        return (
+            "📜 **راهنما و پشتیبانی**\n"
+            "━━━━━━━━━━━━━━\n"
+            "راهنما، درباره، روزانه و گزارش باگ."
+        ), help_kb()
     if data == "act:meow_info":
         return (
             "🐱 برای گرفتن امتیاز، در گروه یا پیوی بنویس:\n"
