@@ -189,11 +189,17 @@ async def claim_daily_reward_atomic(user_id: int, today: str, reward: int, new_s
     return False, int((u or {}).get("daily_streak") or 0), 0
 
 
-async def try_claim_meow_atomic(user_id: int, now_ts: float, cooldown_sec: float, points: int):
+async def try_claim_meow_atomic(
+    user_id: int,
+    now_ts: float,
+    cooldown_sec: float,
+    points: int,
+    coins: int = 0,
+):
     """
     Atomic meow cooldown claim.
-    Updates last_meow + points only if cooldown elapsed.
-    Returns (ok, total_points_after, remaining_sec).
+    Updates last_meow + points (+ optional coins) only if cooldown elapsed.
+    Returns (ok, total_points_after, remaining_sec, total_coins_after).
     """
     threshold = float(now_ts) - float(cooldown_sec)
     row = await fetchrow(
@@ -201,21 +207,22 @@ async def try_claim_meow_atomic(user_id: int, now_ts: float, cooldown_sec: float
         UPDATE users SET
             last_meow = $2,
             meow_points = meow_points + $3,
+            meow_coins = meow_coins + $5,
             total_meows = total_meows + 1,
             updated_at = NOW()
         WHERE user_id = $1
           AND (last_meow IS NULL OR last_meow <= $4)
-        RETURNING meow_points, last_meow
+        RETURNING meow_points, meow_coins, last_meow
         """,
-        int(user_id), float(now_ts), int(points), float(threshold),
+        int(user_id), float(now_ts), int(points), float(threshold), max(0, int(coins)),
     )
     if row:
-        return True, int(row["meow_points"] or 0), 0.0
-    # still in cooldown
+        return True, int(row["meow_points"] or 0), 0.0, int(row["meow_coins"] or 0)
     last = float(await fetchval("SELECT last_meow FROM users WHERE user_id=$1", int(user_id)) or 0)
     remaining = max(0.0, cooldown_sec - (now_ts - last))
     pts = int(await fetchval("SELECT meow_points FROM users WHERE user_id=$1", int(user_id)) or 0)
-    return False, pts, remaining
+    coins_bal = int(await fetchval("SELECT meow_coins FROM users WHERE user_id=$1", int(user_id)) or 0)
+    return False, pts, remaining, coins_bal
 
 
 async def set_gym_level(user_id: int, level: int = 1, chat_id=None):

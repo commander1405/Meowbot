@@ -35,36 +35,39 @@ def power_from_gym(level: int) -> int:
 
 
 def gym_upgrade_cost(level: int) -> int:
+    """هزینه تصاعدی: هرچه سطح بالاتر، هزینه خیلی بیشتر.
+    1→2: 8 | 5→6: 200 | 10→11: 800 | 15→16: 1800 | 19→20: 2888
+    """
     level = int(level)
     if level >= MAX_GYM_LEVEL:
         return 0
-    return level * 5
+    return max(8, int(level * level * 8))
 
 
 async def upgrade_gym(user_id: int) -> tuple:
     """ارتقای باشگاه با meow_points. (ok, message)"""
     from database.pool import fetchrow
-    from database.users import get_meow_points
+    u = await get_user(user_id) or {}
+    gym = int(u.get("gym_level") or 1)
+    if gym >= MAX_GYM_LEVEL:
+        return False, f"🏋️ به سقف باشگاه رسیدی (`{MAX_GYM_LEVEL}`)."
+    cost = gym_upgrade_cost(gym)
     row = await fetchrow(
         """
         UPDATE users SET
-            meow_points = meow_points - (gym_level * 5),
+            meow_points = meow_points - $3,
             gym_level = gym_level + 1,
             updated_at = NOW()
         WHERE user_id = $1
-          AND gym_level < $2
-          AND meow_points >= (gym_level * 5)
+          AND gym_level = $2
+          AND gym_level < $4
+          AND meow_points >= $3
         RETURNING gym_level, meow_points
         """,
-        int(user_id), int(MAX_GYM_LEVEL),
+        int(user_id), int(gym), int(cost), int(MAX_GYM_LEVEL),
     )
     if not row:
-        u = await get_user(user_id) or {}
-        gym = int(u.get("gym_level") or 1)
         pts = int(u.get("meow_points") or 0)
-        if gym >= MAX_GYM_LEVEL:
-            return False, f"🏋️ به سقف باشگاه رسیدی (`{MAX_GYM_LEVEL}`)."
-        cost = gym_upgrade_cost(gym)
         return False, (
             f"❌ امتیاز کافی نیست.\n"
             f"سطح: `{gym}` | هزینه: `{cost}` ⭐ | موجودی: `{pts}`"
@@ -75,7 +78,8 @@ async def upgrade_gym(user_id: int) -> tuple:
         f"🏋️ **باشگاه ارتقا یافت!**\n"
         f"سطح جدید: `{gym}`\n"
         f"قدرت: `{power_from_gym(gym)}`\n"
-        f"امتیاز باقی: `{pts}` ⭐"
+        f"امتیاز باقی: `{pts}` ⭐\n"
+        f"هزینه پرداخت‌شده: `{cost}`"
     )
 
 

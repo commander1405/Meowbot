@@ -81,17 +81,20 @@ async def register_meow(user_id: int, first_name: str = "", username: str = "", 
         await create_user(user_id, first_name=first_name, username=username, chat_id=chat_id)
         user = await get_user(user_id)
 
-    points = 1
+    points = random.randint(1, 20)
+    coins = random.randint(1, 5)
     event_note = ""
     try:
         from database.events import apply_xp_bonus
         points, _mult, event_note = await apply_xp_bonus(points)
     except Exception:
         pass
+    points = max(1, int(points))
+    coins = max(1, int(coins))
 
     from database.users import try_claim_meow_atomic
-    ok, total, remaining = await try_claim_meow_atomic(
-        int(user_id), now, float(MEOW_COOLDOWN), int(points)
+    ok, total, remaining, coins_bal = await try_claim_meow_atomic(
+        int(user_id), now, float(MEOW_COOLDOWN), int(points), int(coins)
     )
     if not ok:
         msgs = [
@@ -102,7 +105,6 @@ async def register_meow(user_id: int, first_name: str = "", username: str = "", 
         ]
         return False, random.choice(msgs), 0
 
-    # group points only after successful claim
     if chat_id is not None:
         try:
             from database.group_stats import add_group_points
@@ -119,6 +121,7 @@ async def register_meow(user_id: int, first_name: str = "", username: str = "", 
     idx = await pick_unseen_index(user_id, "meow_response", len(MEOW_RESPONSES))
     name = first_name or (user.get("first_name") if user else None) or "پیشی"
     msg = MEOW_RESPONSES[idx].format(name=name, gained=points, total=total)
+    msg += f"\n🪙 میوکوین: +{coins} (موجودی: `{coins_bal}`)"
     if event_note:
         msg += f"\n{event_note}"
 
