@@ -164,9 +164,10 @@ def pet_home_kb(has_pet=True, awaiting=False):
             [("✨ ساخت گربه جدید", "pet:create")],
             [("🏠 منوی اصلی", "menu:main")],
         )
+    # ≤7 دکمه: غذا/بازی/خواب/حموم/وضعیت/بیشتر/منو
     return glass(
         [("🍖 غذا", "pet:feed"), ("🎾 بازی", "pet:play_menu")],
-        [("💤 خواب", "pet:sleep"), ("🎁 هدیه", "pet:gift")],
+        [("💤 خواب", "pet:sleep"), ("🛁 حموم", "pet:bath")],
         [("📊 وضعیت", "pet:status"), ("⚙️ بیشتر", "pet:more")],
         [("🏠 منوی اصلی", "menu:main")],
     )
@@ -174,7 +175,8 @@ def pet_home_kb(has_pet=True, awaiting=False):
 
 def pet_more_kb():
     return glass(
-        [("🫶 نوازش", "pet:pet"), ("⬆️ ارتقا", "pet:levelup")],
+        [("🫶 نوازش", "pet:pet"), ("🎁 هدیه", "pet:gift")],
+        [("🔧 تعمیر تخت", "pet:repair_bed"), ("⬆️ ارتقا", "pet:levelup")],
         [("✏️ تغییر نام", "pet:rename")],
         [("🔙 برگشت", "pet:home")],
     )

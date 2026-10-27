@@ -290,7 +290,6 @@ async def try_call_pet(user_id, text: str):
             return None
 
     if is_night_sleep_hours():
-        from utils.keyboards import glass
         kb = glass(
             [("✅ بله، بیدارش کن", "pet:wake_yes")],
             [("❌ خیر", "pet:wake_no")],

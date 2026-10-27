@@ -1,1 +1,1 @@
-redeploy: pet night sleep dirtiness shop logic boss fatigue 2026-10-27T17:47:22Z
+redeploy: fix pet glass UnboundLocal + bath button in home kb 2026-10-27T17:56:49Z
