@@ -167,7 +167,7 @@ def pet_home_kb(has_pet=True, awaiting=False):
     # ≤7 دکمه: غذا/بازی/خواب/حموم/وضعیت/بیشتر/منو
     return glass(
         [("🍖 غذا", "pet:feed"), ("🎾 بازی", "pet:play_menu")],
-        [("💤 خواب", "pet:sleep"), ("🛁 حموم", "pet:bath")],
+        [("💤 خواب", "pet:sleep"), ("🧼 شستن", "pet:bath")],
         [("📊 وضعیت", "pet:status"), ("⚙️ بیشتر", "pet:more")],
         [("🏠 منوی اصلی", "menu:main")],
     )

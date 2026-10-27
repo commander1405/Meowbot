@@ -21,6 +21,13 @@ from database.pets import get_pet, create_pet, update_pet, pet_exists
 from database.users import get_user, create_user, get_meow_coins, spend_meow_coins, add_meow_points, add_meow_coins
 from utils.keyboards import glass, pet_home_kb, pet_more_kb, pet_play_kb, back_main_kb
 
+
+def pet_wake_confirm_kb():
+    return glass(
+        [("✅ بله، بیدارش کن", "pet:wake_yes"), ("❌ خیر", "pet:wake_no")],
+        [("🐾 پنل پیشی", "pet:home")],
+    )
+
 FEED_MESSAGES = [
     "🐱 {name} با ذوق غذاشو خورد! 😋",
     "🐱 {name} حتی ظرف رو هم لیس زد 😂",
@@ -290,28 +297,26 @@ async def try_call_pet(user_id, text: str):
             return None
 
     if is_night_sleep_hours():
-        kb = glass(
-            [("✅ بله، بیدارش کن", "pet:wake_yes")],
-            [("❌ خیر", "pet:wake_no")],
-            [("🐾 پنل پیشی", "pet:home")],
-        )
         return (
             f"💤 **{name} خوابه**\n"
             f"ساعت خواب شبانه (۲۲ تا ۷ تهران).\n"
             f"مطمئنی می‌خوای از خواب بیدارش کنی؟؟؟",
-            kb,
+            pet_wake_confirm_kb(),
         )
 
     dirt = _maybe_dirty(pet)
-    await update_pet(user_id, dirtiness=dirt, interaction_count=int(pet.get("interaction_count") or 0) + 1)
+    try:
+        await update_pet(
+            user_id,
+            dirtiness=dirt,
+            interaction_count=int(pet.get("interaction_count") or 0) + 1,
+        )
+    except Exception:
+        pass
     msg = random.choice(PET_MESSAGES).format(name=name)
-    kb = glass(
-        [("🐾 باز کردن پنل پیشی", "pet:home")],
-        [("🍖 غذا", "pet:feed"), ("🎾 بازی", "pet:play_menu")],
-        [("🫶 نوازش", "pet:pet"), ("🛁 حموم", "pet:bath")],
-        [("💤 خواب", "pet:sleep"), ("🔧 تعمیر تخت", "pet:repair_bed")],
-    )
-    return msg, kb
+    return msg, pet_home_kb(True)
+
+
 
 
 
@@ -604,24 +609,36 @@ async def action_gift(user_id):
 
 
 async def action_bath(user_id):
+    """شستن گربه — با صابون قوی‌تر؛ بدون صابون هم ممکن است."""
     pet = await get_pet(user_id)
     if not pet or pet.get("awaiting_name"):
         return "❌ اول Pet بساز!", pet_home_kb(False)
-    item, meta, err = await _need_item(user_id, "bath", "حموم")
-    if err:
-        return err
-    from database.inventory import consume_use
-    ok, left, _ = await consume_use(user_id, item["item_id"], 1)
-    if not ok:
-        return "❌ صابون تموم شده.", pet_home_kb(True)
-    effect = _as_dict(meta)
-    clean = int(effect.get("cleanliness") or 30)
-    dirt = max(0, int(pet.get("dirtiness") or 20) - clean)
-    mood = clamp(int(pet.get("mood") or 70) + int(effect.get("mood") or 2))
-    await update_pet(user_id, dirtiness=dirt, mood=mood, last_bath=time.time())
     name = pet.get("pet_name") or "Pet"
+    from database.inventory import find_usable_item, consume_use
+    item, meta = await find_usable_item(user_id, "bath")
+    used_soap = False
+    clean = 18
+    mood_add = 1
+    if item:
+        ok, left, _ = await consume_use(user_id, item["item_id"], 1)
+        if ok:
+            used_soap = True
+            effect = _as_dict(meta)
+            clean = int(effect.get("cleanliness") or 35)
+            mood_add = int(effect.get("mood") or 2)
+    dirt = max(0, int(pet.get("dirtiness") or 20) - clean)
+    mood = clamp(int(pet.get("mood") or 70) + mood_add)
+    await update_pet(user_id, dirtiness=dirt, mood=mood, last_bath=time.time())
     pet = await get_pet(user_id)
-    return f"🛁 {name} حموم شد! کثیفی کم شد.\n\n" + pet_card(pet), pet_home_kb(True)
+    if used_soap:
+        msg = f"🧼 **{name}** با صابون شسته شد! کثیفی کم شد."
+    else:
+        msg = (
+            f"🛁 **{name}** رو با آب شستی (بدون صابون).\n"
+            f"اثر کمتر است — از فروشگاه **صابون گربه** بخر تا تمیزتر شود."
+        )
+    return msg + "\n\n" + pet_card(pet), pet_home_kb(True)
+
 
 
 async def action_repair_bed(user_id):

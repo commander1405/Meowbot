@@ -28,6 +28,7 @@ from database.users import spend_meow_coins, get_meow_coins
 from core.meow import is_meow, is_allowed_group, register_meow
 from core.menu import WELCOME, handle_menu_callback
 from utils.keyboards import main_menu_kb, shop_kb, back_main_kb, shop_cats_kb, set_panel_owner, reset_panel_owner
+from core.group_settings import show_group_list
 
 
 async def _main_kb():
@@ -328,8 +329,7 @@ async def on_message(message: Message):
                 from database.groups import register_group, register_group_user
                 await register_group(gid, title="", username="")
                 await register_group_user(int(user_id), gid)
-                from core.group_settings import show_group_list
-                txt, kb = await show_group_list(int(user_id))
+                                txt, kb = await show_group_list(int(user_id))
                 await message.reply(
                     f"✅ گروه `{gid}` به لیستت اضافه شد.\n\n" + txt,
                     components=kb,
@@ -343,7 +343,6 @@ async def on_message(message: Message):
             "تنظیم گروه", "تنظیمات گروه", "/groupsettings", "/group",
             "groupsettings", "تنظیمات ربات",
         ):
-            from core.group_settings import show_group_list
             txt, kb = await show_group_list(int(user_id))
             await message.reply(txt, components=kb)
             return
