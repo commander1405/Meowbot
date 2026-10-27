@@ -636,7 +636,12 @@ async def _boss_attack(user_id: int, boss_id: int, first_name: str = "", chat_id
             """,
             int(user_id), chat, rec,
         )
-        return "😮‍💨 خستگی! کمی استراحت کن.", None
+        wait_s = max(1, int(BOSS_FATIGUE_RECOVERY_SEC))
+        return (
+            f"😮‍💨 به لیمیت حمله رسیدی!\nلطفاً {wait_s} ثانیه صبر کنید و دوباره تلاش کنید.",
+            None,
+            True,
+        )
 
     pet = await get_pet(user_id)
     pet_lv = int((pet or {}).get("level") or 1) if pet and not pet.get("awaiting_name") else 1

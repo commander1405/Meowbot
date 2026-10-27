@@ -835,11 +835,13 @@ async def on_callback(callback: CallbackQuery):
         # از این به بعد کیبوردهای ساخته‌شده با owner همین کاربر تگ می‌شوند
         _owner_token = set_panel_owner(user_id)
 
-        # اول answer تا لودینگ دکمه قطع شود
-        try:
-            await callback.answer()
-        except Exception as e:
-            logger.debug(f"callback.answer: {e}")
+        # برای حمله باس answer را نگه می‌داریم تا بتوان show_alert زد
+        _defer_answer = str(data or "").startswith("hw:atk:")
+        if not _defer_answer:
+            try:
+                await callback.answer()
+            except Exception as e:
+                logger.debug(f"callback.answer: {e}")
 
         if not data:
             if msg is not None:
@@ -1091,7 +1093,10 @@ async def on_callback(callback: CallbackQuery):
         else:
             result = await _dispatch(user_id, data, first_name, username, chat_id=chat_id, private=private)
 
-        if isinstance(result, tuple) and len(result) >= 2:
+        show_alert = False
+        if isinstance(result, tuple) and len(result) >= 3:
+            text, kb, show_alert = result[0], result[1], bool(result[2])
+        elif isinstance(result, tuple) and len(result) >= 2:
             text, kb = result[0], result[1]
         elif isinstance(result, tuple) and len(result) == 1:
             text, kb = result[0], await _main_kb()
@@ -1100,12 +1105,18 @@ async def on_callback(callback: CallbackQuery):
         else:
             text, kb = WELCOME, await _main_kb()
 
-        # Group pumpkin/boss handlers may already have edited the message (kb is None + short ack)
-        if data.startswith("hw:") and (kb is None or text is None):
+        # Group pumpkin/boss: kb=None یعنی پیام گروه ادیت شده یا فقط alert لازم است
+        if data.startswith("hw:") and (kb is None or text is None or show_alert):
             try:
-                await callback.answer(str(text or "✓")[:180])
+                await callback.answer(
+                    str(text or "✓")[:200],
+                    show_alert=bool(show_alert),
+                )
             except Exception:
-                pass
+                try:
+                    await callback.answer(str(text or "✓")[:180])
+                except Exception:
+                    pass
             try:
                 reset_panel_owner(_owner_token)
             except Exception:
