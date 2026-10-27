@@ -618,11 +618,11 @@ async def _boss_attack(user_id: int, boss_id: int, first_name: str = "", chat_id
     gym = int((u or {}).get("gym_level") or 1)
     limit += max(0, (gym - 1) // 5)
     if recover_at > now:
+        wait_s = max(1, int(recover_at - now))
         return (
-            f"😮‍💨 خسته شدی... یکم صبر کن.\n"
-            f"⏳ حدود `{int(recover_at - now)}` ثانیه تا ریکاوری\n"
-            f"یا از فروشگاه **پوشن خستگی** بخر.",
+            f"😮‍💨 خسته شدی!\nلطفاً {wait_s} ثانیه صبر کنید تا انرژی‌ات برگردد.",
             None,
+            True,
         )
     if attacks >= limit:
         rec = now + BOSS_FATIGUE_RECOVERY_SEC
@@ -636,7 +636,7 @@ async def _boss_attack(user_id: int, boss_id: int, first_name: str = "", chat_id
             """,
             int(user_id), chat, rec,
         )
-        wait_s = max(1, int(BOSS_FATIGUE_RECOVERY_SEC))
+        wait_s = max(1, int(rec - now))
         return (
             f"😮‍💨 به لیمیت حمله رسیدی!\nلطفاً {wait_s} ثانیه صبر کنید و دوباره تلاش کنید.",
             None,
