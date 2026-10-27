@@ -143,6 +143,12 @@ async def on_ready():
         db_ok = True
         _db_ready = True
         print("✅ Database + seeds ready")
+        try:
+            from utils.ui_helpers import refresh_promo_from_db
+            await refresh_promo_from_db()
+            print("✅ Promo ad config loaded")
+        except Exception as _pe:
+            print(f"⚠️ Promo config: {_pe}")
     except Exception as e:
         _db_ready = False
         print(f"❌ Database init FAILED — bot is NOT fully operational: {type(e).__name__}: {e}")

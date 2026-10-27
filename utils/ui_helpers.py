@@ -1,62 +1,61 @@
 # ==========================================
-# MeowBot — UI Helpers (Channel promo + Studio)
-# ==========================================
-# دکمه عضویت کانال اطلاع‌رسانی زیر تمام پیام‌های خروجی
-# + حفظ دکمه استدیو (قابلیت قبلی)
+# MeowBot — UI Helpers (Configurable ad + Studio)
+# پورت منطق دکمه تبلیغ MEGA + دکمه استدیو اختیاری
 # ==========================================
 
 from __future__ import annotations
 
-import random
+import logging
 from typing import Optional
 
 from bale import InlineKeyboardMarkup, InlineKeyboardButton
 
+logger = logging.getLogger("meowbot.ui")
 
-CHANNEL_USERNAME = "@meownewsbot"
-CHANNEL_JOIN_URL = "https://ble.ir/join/AGwTW3RLb3"
-
-CHANNEL_BUTTON_TEXTS = [
-    "چنل اطلاع رسانی",
-    "جوین نمیدی؟",
-    "بزن روم",
-    "عضو شو مشتی",
-    "خبرای میو اینجاست",
-    "از دست نده 🐱",
-    "کانال رسمی میو",
-    "عضو شو، باخبر شو",
-    "اینجا خبر می‌دیم",
-    "یه جوین بده رفیق",
-    "چنل میو بازه",
-    "بزن بریم چنل",
-    "آپدیت‌ها اینجان",
-    "میو نیوز 👇",
-    "عضویت در کانال",
-    "خبر جدید می‌خوای؟",
-    "چنل رو از دست نده",
-    "بزن عضو شی",
-    "اطلاعیه‌ها اینجا",
-    "فقط یه کلیک تا چنل",
-    "میو رو دنبال کن",
-    "کانال خبری میو",
-    "جوین شو الان",
-    "چنل رسمی MeowBot",
-    "اینجا باشه برات بهتره",
-    "خبر اول اینجا میاد",
-    "یه سر به چنل بزن",
-    "عضو کانال شو",
-    "میو منتظرته تو چنل",
-    "لینک چنل 👇",
-]
-
+# fallback سخت‌کد اگر DB خالی باشد (رفتار قبلی)
+DEFAULT_CHANNEL_URL = "https://ble.ir/join/AGwTW3RLb3"
+DEFAULT_CHANNEL_TITLE = "عضویت در کانال"
 STUDIO_BUTTON_TEXT = "🌑 دارک نایت استدیو"
 STUDIO_BUTTON_URL = "https://ble.ir/join/FetpvYjpGQ"
 
 _message_patched = False
 
+# sync snapshot for with_promo (refreshed by async load)
+_promo_snapshot = {
+    "enabled": False,
+    "url": "",
+    "title": "",
+    "studio_on": True,
+}
 
-def channel_button() -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=random.choice(CHANNEL_BUTTON_TEXTS), url=CHANNEL_JOIN_URL)
+
+def update_promo_snapshot(enabled: bool, url: str, title: str, studio_on: bool = True) -> None:
+    _promo_snapshot["enabled"] = bool(enabled)
+    _promo_snapshot["url"] = (url or "").strip()
+    _promo_snapshot["title"] = (title or "").strip() or DEFAULT_CHANNEL_TITLE
+    _promo_snapshot["studio_on"] = bool(studio_on)
+
+
+async def refresh_promo_from_db() -> None:
+    try:
+        from admin.ads_mgmt import get_ad_config
+        enabled, url, title = await get_ad_config()
+        from database.settings import get_setting
+        studio_raw = await get_setting("studio_button_enabled", "1")
+        studio_on = str(studio_raw or "1").strip().lower() in ("1", "true", "yes", "on")
+        update_promo_snapshot(enabled, url, title, studio_on)
+    except Exception as e:
+        logger.debug("refresh_promo_from_db: %s", e)
+
+
+def channel_button() -> InlineKeyboardButton | None:
+    if not _promo_snapshot.get("enabled"):
+        return None
+    url = _promo_snapshot.get("url") or ""
+    title = _promo_snapshot.get("title") or DEFAULT_CHANNEL_TITLE
+    if not url:
+        return None
+    return InlineKeyboardButton(text=title[:64], url=url)
 
 
 def studio_button() -> InlineKeyboardButton:
@@ -98,8 +97,8 @@ def _button_url(btn) -> Optional[str]:
     return None
 
 
-def with_promo(components=None) -> InlineKeyboardMarkup:
-    """کیبورد فعلی + ردیف کانال (متن رندوم) + استدیو؛ بدون تکرار URL."""
+def with_promo(components=None, *, skip_ad: bool = False) -> InlineKeyboardMarkup:
+    """کیبورد فعلی + دکمه تبلیغ (اگر فعال) + استدیو؛ بدون تکرار URL."""
     markup = InlineKeyboardMarkup()
     max_row = 0
     existing_urls = set()
@@ -115,22 +114,31 @@ def with_promo(components=None) -> InlineKeyboardMarkup:
         except Exception:
             pass
 
+    if skip_ad:
+        return markup
+
     next_row = max_row + 1
-    if CHANNEL_JOIN_URL not in existing_urls:
-        try:
-            markup.add(channel_button(), row=next_row)
-            next_row += 1
-        except Exception:
-            pass
-    if STUDIO_BUTTON_URL not in existing_urls:
-        try:
-            markup.add(studio_button(), row=next_row)
-        except Exception:
-            pass
+    ad = channel_button()
+    if ad is not None:
+        u = _button_url(ad)
+        if u and u not in existing_urls:
+            try:
+                markup.add(ad, row=next_row)
+                next_row += 1
+                existing_urls.add(u)
+            except Exception:
+                pass
+
+    if _promo_snapshot.get("studio_on", True):
+        if STUDIO_BUTTON_URL not in existing_urls:
+            try:
+                markup.add(studio_button(), row=next_row)
+            except Exception:
+                pass
     return markup
 
 
-def with_studio(components=None) -> InlineKeyboardMarkup:
+def with_studio(components=None):
     return with_promo(components)
 
 
@@ -155,6 +163,9 @@ def _patch_bot_instance(bot) -> None:
             continue
 
         async def wrapped(*args, _orig=orig, **kwargs):
+            if kwargs.get("skip_ad"):
+                kwargs.pop("skip_ad", None)
+                return await _orig(*args, **kwargs)
             if "components" in kwargs:
                 kwargs["components"] = with_promo(kwargs.get("components"))
                 return await _orig(*args, **kwargs)
@@ -171,7 +182,7 @@ def _patch_bot_instance(bot) -> None:
 
 
 def patch_bot_messaging(bot=None):
-    """پچ Message.reply/edit و bot.send_* برای دکمه کانال زیر همه پیام‌ها."""
+    """پچ Message.reply/edit و bot.send_* برای دکمه تبلیغ زیر پیام‌ها."""
     global _message_patched
     if _message_patched:
         if bot is not None:
@@ -184,50 +195,49 @@ def patch_bot_messaging(bot=None):
         print("⚠️ ui_helpers: bale.Message not available")
         return
 
-    def _wrap_text(orig):
-        async def wrapped(self, text, *args, components=None, **kwargs):
-            components = with_promo(components)
-            return await orig(self, text, *args, components=components, **kwargs)
+    if not getattr(Message.reply, "_meow_promo_patched", False):
+        _orig_reply = Message.reply
 
-        return wrapped
-
-    for attr in ("reply", "edit", "edit_text"):
-        if hasattr(Message, attr):
+        async def reply_patched(self, *args, **kwargs):
+            if kwargs.get("skip_ad"):
+                kwargs.pop("skip_ad", None)
+                return await _orig_reply(self, *args, **kwargs)
+            if "components" in kwargs:
+                kwargs["components"] = with_promo(kwargs.get("components"))
+            elif len(args) >= 2:
+                # reply(text, components)
+                pass
             try:
-                setattr(Message, attr, _wrap_text(getattr(Message, attr)))
-            except Exception as e:
-                print(f"⚠️ Could not patch Message.{attr}: {e}")
-
-    for attr in (
-        "reply_photo",
-        "reply_document",
-        "reply_video",
-        "reply_animation",
-        "reply_audio",
-        "edit_caption",
-    ):
-        if not hasattr(Message, attr):
-            continue
-        orig = getattr(Message, attr)
-
-        async def media_wrapped(self, *args, components=None, _orig=orig, **kwargs):
-            components = with_promo(components)
-            try:
-                return await _orig(self, *args, components=components, **kwargs)
+                if "components" not in kwargs:
+                    kwargs["components"] = with_promo(None)
+                return await _orig_reply(self, *args, **kwargs)
             except TypeError:
+                return await _orig_reply(self, *args, **kwargs)
+
+        reply_patched._meow_promo_patched = True  # type: ignore
+        Message.reply = reply_patched
+
+    for method_name in ("edit_text", "edit"):
+        if not hasattr(Message, method_name):
+            continue
+        orig = getattr(Message, method_name)
+        if getattr(orig, "_meow_promo_patched", False):
+            continue
+
+        async def edit_patched(self, *args, _orig=orig, **kwargs):
+            if kwargs.get("skip_ad"):
+                kwargs.pop("skip_ad", None)
                 return await _orig(self, *args, **kwargs)
+            if "components" in kwargs and kwargs["components"] is not None:
+                kwargs["components"] = with_promo(kwargs.get("components"))
+            return await _orig(self, *args, **kwargs)
 
         try:
-            setattr(Message, attr, media_wrapped)
-        except Exception as e:
-            print(f"⚠️ Could not patch Message.{attr}: {e}")
-
-    if bot is not None:
-        _patch_bot_instance(bot)
+            edit_patched._meow_promo_patched = True  # type: ignore
+            setattr(Message, method_name, edit_patched)
+        except Exception:
+            pass
 
     _message_patched = True
-    print("✅ Channel promo + studio: messaging patched")
-
-
-def patch_studio(bot=None):
-    return patch_bot_messaging(bot)
+    if bot is not None:
+        _patch_bot_instance(bot)

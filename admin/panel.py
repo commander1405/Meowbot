@@ -80,9 +80,9 @@ def mgmt_kb():
 
 def settings_hub_kb():
     return _kb([
+        [("📢 دکمه تبلیغ", "owner:ads"), ("📨 پیام همگانی", "owner:broadcast")],
         [("📅 فصول", "owner:seasons"), ("💡 راهنماها", "owner:guides")],
-        [("📢 همگانی", "owner:broadcast"), ("💾 بکاپ", "owner:backup")],
-        [("🌍 گروه جهانی", "owner:global_group"), ("🚧 نگهداری", "owner:maint")],
+        [("💾 بکاپ", "owner:backup"), ("🌍 گروه جهانی", "owner:global_group")],
         [("🔙 منوی Owner", "owner:home")],
     ])
 
@@ -139,10 +139,11 @@ def guides_kb():
 
 def broadcast_kb():
     return _kb([
-        [("📢 به همه گروه‌ها", "owner:bc_groups")],
-        [("👥 به همه کاربران (PV)", "owner:bc_users")],
+        [("👤 کاربران خصوصی", "owner:bc_users")],
+        [("👥 گروه‌ها", "owner:bc_groups")],
+        [("🌐 همه (کاربر+گروه)", "owner:bc_all")],
         [("🛡 فقط Adminها", "owner:bc_admins")],
-        [("❌ لغو", "owner:home")],
+        [("🔙 تنظیمات", "owner:settings_hub")],
     ])
 
 
@@ -256,6 +257,49 @@ async def handle_owner_callback(bot, callback, data: str):
         kb = await halloween_owner_kb()
         await _edit(msg, "🎃 هالووین دوباره فعال شد.", kb)
         return
+
+    # --- Ads (MEGA-style single promo button) ---
+    if action == "ads" or action.startswith("ad:"):
+        from admin.ads_mgmt import (
+            ads_home_text, ads_home_kb, ads_cancel_kb,
+            set_ad_enabled, get_ad_config, set_ad_url, set_ad_title,
+        )
+        from utils.ui_helpers import refresh_promo_from_db
+        sub = action.split(":", 1)[1] if action.startswith("ad:") else ""
+        if action == "ads" or sub == "":
+            await _edit(msg, await ads_home_text(), await ads_home_kb())
+            return
+        if sub == "off":
+            await set_ad_enabled(False)
+            await refresh_promo_from_db()
+            await _edit(msg, "🔴 تبلیغ خاموش شد.\nپیام‌های جدید دکمه تبلیغ نخواهند داشت.", await ads_home_kb())
+            return
+        if sub == "on":
+            en, url, title = await get_ad_config()
+            if not url or not title:
+                await _edit(msg, "ابتدا لینک و عنوان را تنظیم کن.", await ads_home_kb())
+                return
+            await set_ad_enabled(True)
+            await refresh_promo_from_db()
+            await _edit(msg, "🟢 تبلیغ فعال شد.", await ads_home_kb())
+            return
+        if sub in ("setup", "set_url"):
+            _pending[user_id] = {"action": "ad_url"}
+            await _edit(
+                msg,
+                "لینک کانال/گروه/ربات را بفرست.\nباید شامل `ble.ir/...` باشد.",
+                ads_cancel_kb(),
+            )
+            return
+        if sub == "set_title":
+            en, url, title = await get_ad_config()
+            if not url:
+                await _edit(msg, "ابتدا لینک را تنظیم کن.", await ads_home_kb())
+                return
+            _pending[user_id] = {"action": "ad_title"}
+            await _edit(msg, "عنوان دکمه تبلیغ را بفرست (نمایش روی دکمه):", ads_cancel_kb())
+            return
+
 
 
     try:
@@ -724,18 +768,23 @@ async def handle_owner_callback(bot, callback, data: str):
             return
 
         if action == "bc_groups":
-            _pending[user_id] = {"action": "bc_groups"}
-            await _edit(msg, "📢 متن پیام همگانی برای **همه گروه‌ها** را بفرست:", back_nav())
+            _pending[user_id] = {"action": "bc_await", "bc_target": "groups"}
+            await _edit(msg, "📢 متن پیام برای **گروه‌ها** را بفرست:\nسپس تأیید می‌گیری.", back_nav())
             return
 
         if action == "bc_users":
-            _pending[user_id] = {"action": "bc_users"}
-            await _edit(msg, "👥 متن پیام برای **همه کاربران (PV)** را بفرست:\n(ممکن است طول بکشد)", back_nav())
+            _pending[user_id] = {"action": "bc_await", "bc_target": "users"}
+            await _edit(msg, "👥 متن پیام برای **کاربران PV** را بفرست:\nسپس تأیید می‌گیری.", back_nav())
             return
 
         if action == "bc_admins":
-            _pending[user_id] = {"action": "bc_admins"}
-            await _edit(msg, "🛡 متن پیام برای **همه Adminها** را بفرست:", back_nav())
+            _pending[user_id] = {"action": "bc_await", "bc_target": "admins"}
+            await _edit(msg, "🛡 متن پیام برای **Adminها** را بفرست:\nسپس تأیید می‌گیری.", back_nav())
+            return
+
+        if action == "bc_all":
+            _pending[user_id] = {"action": "bc_await", "bc_target": "all"}
+            await _edit(msg, "🌐 متن پیام همگانی برای **همه** را بفرست:\nسپس پیش‌نمایش و تأیید.", back_nav())
             return
 
         # ========== MSG ADMIN ==========
@@ -1141,40 +1190,115 @@ async def handle_owner_text(bot, message, user_id: int, text: str) -> bool:
             _pending.pop(user_id, None)
             return True
 
-        if action in ("bc_groups", "bc_users", "bc_admins"):
-            sent = failed = 0
-            if action == "bc_groups":
+        if action in ("ad_url", "ad_title"):
+            from admin.ads_mgmt import normalize_bale_url, set_ad_url, set_ad_title, set_ad_enabled, ads_home_text, ads_home_kb
+            from utils.ui_helpers import refresh_promo_from_db
+            if action == "ad_url":
+                url = normalize_bale_url(text)
+                if not url:
+                    await message.reply("❌ لینک معتبر نیست. مثال: `https://ble.ir/meownewsbot`", components=back_nav())
+                    return True
+                await set_ad_url(url)
+                _pending[user_id] = {"action": "ad_title"}
+                await message.reply(
+                    f"✅ لینک ذخیره شد:\n`{url}`\n\nحالا **عنوان دکمه** را بفرست:",
+                    components=back_nav(),
+                )
+                return True
+            # ad_title
+            title = (text or "").strip()[:64]
+            if len(title) < 1:
+                await message.reply("❌ عنوان خالی است.", components=back_nav())
+                return True
+            await set_ad_title(title)
+            await set_ad_enabled(True)
+            await refresh_promo_from_db()
+            _pending.pop(user_id, None)
+            await message.reply(
+                f"✅ تبلیغ فعال شد.\nعنوان: `{title}`\nزیر پیام‌های بعدی نمایش داده می‌شود.",
+                components=await ads_home_kb(),
+            )
+            return True
+
+        if action == "bc_await":
+            target = state.get("bc_target") or "users"
+            label = {"users": "کاربران PV", "groups": "گروه‌ها", "all": "همه", "admins": "Adminها"}.get(target, target)
+            # count recipients
+            count = 0
+            if target in ("users", "all"):
+                users = await get_all_users()
+                count += len(users or [])
+            if target in ("groups", "all"):
                 groups = await get_all_groups()
-                for g in groups or []:
-                    try:
-                        await bot.send_message(g["chat_id"], text)
-                        sent += 1
-                    except Exception:
-                        failed += 1
-            elif action == "bc_admins":
+                count += len(groups or [])
+            if target == "admins":
+                admins = await list_admins()
+                count = len({int(a["user_id"]) for a in (admins or [])} | {int(OWNER_ID)})
+            _pending[user_id] = {
+                "action": "bc_confirm",
+                "bc_target": target,
+                "bc_text": text,
+            }
+            await message.reply(
+                f"📨 **پیش‌نمایش پیام همگانی**\n"
+                f"هدف: {label}\n"
+                f"تعداد تقریبی: `{count}`\n"
+                f"محتوا:\n{text[:500]}\n\n"
+                f"برای ارسال بنویس: `تأیید`\n"
+                f"برای لغو: `لغو`",
+                components=back_nav(),
+            )
+            return True
+
+        if action == "bc_confirm":
+            if text.strip() not in ("تأیید", "تایید", "confirm", "yes", "بله"):
+                if text.strip() in ("لغو", "cancel", "خیر"):
+                    _pending.pop(user_id, None)
+                    await message.reply("❌ ارسال لغو شد.", components=nav())
+                    return True
+                await message.reply("برای ارسال بنویس `تأیید` یا برای لغو `لغو`.", components=back_nav())
+                return True
+            target = state.get("bc_target") or "users"
+            body = state.get("bc_text") or ""
+            sent = failed = 0
+            destinations = []
+            if target in ("users", "all"):
+                for u in (await get_all_users() or []):
+                    destinations.append(("user", u["user_id"]))
+            if target in ("groups", "all"):
+                for g in (await get_all_groups() or []):
+                    destinations.append(("group", g["chat_id"]))
+            if target == "admins":
                 admins = await list_admins()
                 ids = {int(a["user_id"]) for a in (admins or [])}
                 ids.add(int(OWNER_ID))
                 for aid in ids:
-                    try:
-                        await bot.send_message(aid, f"🛡 **Admin Broadcast**\n\n{text}")
-                        sent += 1
-                    except Exception:
-                        failed += 1
-            else:  # bc_users
-                users = await get_all_users()
-                for u in (users or [])[:500]:  # safety cap
-                    try:
-                        await bot.send_message(u["user_id"], text)
-                        sent += 1
-                    except Exception:
-                        failed += 1
-            await log_action(user_id, action, result="ok", details={"sent": sent, "failed": failed})
+                    destinations.append(("admin", aid))
+            # soft cap safety for users portion
+            for kind, dest in destinations:
+                try:
+                    msg_body = body
+                    if kind == "admin":
+                        msg_body = f"🛡 **Admin Broadcast**\n\n{body}"
+                    await bot.send_message(dest, msg_body)
+                    sent += 1
+                except Exception:
+                    failed += 1
+            await log_action(user_id, f"bc_{target}", result="ok", details={"sent": sent, "failed": failed})
             await message.reply(
-                f"📢 تمام شد.\n✅ ارسال: `{sent}`\n❌ خطا: `{failed}`",
+                f"✅ **گزارش پیام همگانی**\n"
+                f"هدف: `{target}`\n"
+                f"موفق: `{sent}`\n"
+                f"ناموفق: `{failed}`",
                 components=nav(),
             )
             _pending.pop(user_id, None)
+            return True
+
+        # legacy aliases
+        if action in ("bc_groups", "bc_users", "bc_admins"):
+            _pending[user_id] = {"action": "bc_await", "bc_target": action.replace("bc_", "")}
+            await message.reply("متن پیام همگانی را بفرست؛ بعداً تأیید می‌گیری.", components=back_nav())
             return True
 
         if action == "msg_admin":
