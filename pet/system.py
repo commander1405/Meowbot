@@ -70,6 +70,45 @@ def _as_dict(val):
         return {}
 
 
+
+from zoneinfo import ZoneInfo
+_TEHRAN = ZoneInfo("Asia/Tehran")
+NIGHT_SLEEP_START = 22  # 10 PM
+NIGHT_SLEEP_END = 7     # 7 AM
+
+SLEEPY_MESSAGES = [
+    "{name} خیلی خواب‌آلود بود و آروم‌آروم اومد سمتت 😴",
+    "{name} با چشمای نیمه‌بسته نگاهت کرد و دوباره دراز کشید...",
+    "گربه خمیازه کشید و سرش رو اشتباهی گذاشت روی پات 💤",
+    "{name} داشه چشاش بسته می‌شد و آروم خرخر می‌کرد...",
+    "نیمه‌شب است؛ {name} فقط یک میوی ضعیف داد و برگشت خوابید 🌙",
+]
+SLEEPY_FEED = [
+    "{name} داشه چشاش بسته می‌شد و سرش رو اشتباهی انداخت تو غذا 😹",
+    "نصف‌خواب، یه لقمه زد و دوباره دراز کشید...",
+    "{name} با چشم نیمه‌باز غذا رو بو کرد و آروم خورد 😴",
+]
+SLEEPY_PLAY = [
+    "{name} توپ رو یه دفعه هل داد و دوباره خوابید 💤",
+    "خواب‌آلود بود؛ فقط یه کم دم تکون داد و برگشت...",
+    "{name} بازی رو ول کرد و رفت گوشه تخت 🌙",
+]
+
+
+def is_night_sleep_hours() -> bool:
+    """۲۲ تا ۷ به وقت تهران = خواب شبانه اجباری."""
+    from datetime import datetime
+    h = datetime.now(_TEHRAN).hour
+    return h >= NIGHT_SLEEP_START or h < NIGHT_SLEEP_END
+
+
+def _maybe_dirty(pet: dict) -> int:
+    import random
+    d = int(pet.get("dirtiness") or 20)
+    d = min(100, d + random.randint(1, 8))
+    return d
+
+
 def clamp(v, lo=PET_STAT_MIN, hi=PET_STAT_MAX):
     return max(lo, min(hi, int(v)))
 
@@ -120,13 +159,15 @@ def pet_card(pet: dict) -> str:
     energy = int(pet.get("energy") or 0)
     mood = int(pet.get("mood") or 70)
     health = int(pet.get("health") or 100)
-    sleeping = pet.get("is_sleeping")
+    dirt = int(pet.get("dirtiness") or 20)
+    sleeping = pet.get("is_sleeping") or is_night_sleep_hours()
 
     def bar(v):
+        v = max(0, min(100, int(v)))
         filled = int(v / 10)
         return "█" * filled + "░" * (10 - filled)
 
-    status = "💤 خواب" if sleeping else "✨ بیدار"
+    status = "💤 خواب (شب)" if sleeping else "✨ بیدار"
     return (
         f"🐾 **{name}**\n"
         f"━━━━━━━━━━━━━━\n"
@@ -136,6 +177,7 @@ def pet_card(pet: dict) -> str:
         f"⚡ انرژی  {bar(energy)} `{energy}`\n"
         f"😊 حال    {bar(mood)} `{mood}`\n"
         f"💚 سلامت  {bar(health)} `{health}`\n"
+        f"🛁 کثیفی  {bar(dirt)} `{dirt}`\n"
         f"━━━━━━━━━━━━━━\n"
         f"وضعیت: {status}\n"
         f"تعامل‌ها: `{pet.get('interaction_count', 0)}`"
@@ -231,10 +273,7 @@ async def handle_name_input(user_id, text: str):
 
 
 async def try_call_pet(user_id, text: str):
-    """
-    اگر متن نام Pet باشد → پیام صدا + دکمه باز کردن پنل کامل.
-    Returns (text, keyboard) یا None
-    """
+    """اگر متن نام Pet باشد → پیام صدا + دکمه. شب‌ها تأیید بیدار کردن."""
     pet = await get_pet(user_id)
     if not pet or pet.get("awaiting_name") or not pet.get("pet_name"):
         return None
@@ -244,19 +283,34 @@ async def try_call_pet(user_id, text: str):
     raw = (text or "").strip()
     if not raw:
         return None
-    # تطبیق نام (بدون حساسیت به فاصله اضافه)
-    if raw.lower() != name.lower() and name not in raw and raw not in name:
-        # فقط اگر دقیقاً نام یا «نام» + کمی پسوند
-        norm = re.sub(r"\s+", "", raw).lower()
-        nname = re.sub(r"\s+", "", name).lower()
-        if norm != nname and not raw.lower().startswith(name.lower()):
+    norm = re.sub(r"\s+", "", raw).lower()
+    nname = re.sub(r"\s+", "", name).lower()
+    if norm != nname and raw.lower() != name.lower() and not raw.lower().startswith(name.lower()):
+        if name not in raw and raw not in name:
             return None
-    msg = random.choice(CALL_MESSAGES).format(name=name)
-    # دکمه باز کردن همان پنل کامل Pet
+
+    if is_night_sleep_hours():
+        from utils.keyboards import glass
+        kb = glass(
+            [("✅ بله، بیدارش کن", "pet:wake_yes")],
+            [("❌ خیر", "pet:wake_no")],
+            [("🐾 پنل پیشی", "pet:home")],
+        )
+        return (
+            f"💤 **{name} خوابه**\n"
+            f"ساعت خواب شبانه (۲۲ تا ۷ تهران).\n"
+            f"مطمئنی می‌خوای از خواب بیدارش کنی؟؟؟",
+            kb,
+        )
+
+    dirt = _maybe_dirty(pet)
+    await update_pet(user_id, dirtiness=dirt, interaction_count=int(pet.get("interaction_count") or 0) + 1)
+    msg = random.choice(PET_MESSAGES).format(name=name)
     kb = glass(
         [("🐾 باز کردن پنل پیشی", "pet:home")],
         [("🍖 غذا", "pet:feed"), ("🎾 بازی", "pet:play_menu")],
-        [("🫶 نوازش", "pet:pet"), ("💤 خواب", "pet:sleep")],
+        [("🫶 نوازش", "pet:pet"), ("🛁 حموم", "pet:bath")],
+        [("💤 خواب", "pet:sleep"), ("🔧 تعمیر تخت", "pet:repair_bed")],
     )
     return msg, kb
 
@@ -287,8 +341,10 @@ async def action_feed(user_id):
     pet = await get_pet(user_id)
     if not pet or pet.get("awaiting_name"):
         return "❌ اول Pet بساز و اسم بذار!", pet_home_kb(False)
-    if pet.get("is_sleeping"):
+    if pet.get("is_sleeping") and not is_night_sleep_hours():
         return "💤 گربه خوابه؛ اول بیدارش کن.", pet_home_kb(True)
+    if is_night_sleep_hours() and not pet.get("_force_wake"):
+        pass  # اجازه فعالیت با تم خواب‌آلود
 
     item, meta, err = await _need_item(user_id, "food", "غذا دادن")
     if err:
@@ -311,7 +367,7 @@ async def action_feed(user_id):
     if cd > 0:
         return f"⏳ غذا بعد از `{fmt_cd(cd)}`", pet_home_kb(True)
 
-    hunger = clamp(int(pet.get("hunger") or 0) + hunger_add)
+    hunger = clamp(int(pet.get("hunger") or 0) + max(1, int(hunger_add * 0.7)))
     rel = clamp(int(pet.get("relationship") or 50) + rel_add)
     mood = clamp(int(pet.get("mood") or 70) + mood_add)
     xp = int(pet.get("xp") or 0) + xp_add
@@ -319,13 +375,13 @@ async def action_feed(user_id):
     level, xp, leveled = _apply_xp(level, xp)
     await update_pet(
         user_id,
-        hunger=hunger, relationship=rel, mood=mood, xp=xp, level=level,
+        hunger=hunger, relationship=rel, mood=mood, xp=xp, level=level, dirtiness=_maybe_dirty(pet),
         last_feed=now, foods_given=int(pet.get("foods_given") or 0) + 1,
         interaction_count=int(pet.get("interaction_count") or 0) + 1,
         last_interaction=now,
     )
     name = pet.get("pet_name") or "Pet"
-    msg = random.choice(FEED_MESSAGES).format(name=name)
+    msg = random.choice(SLEEPY_FEED if is_night_sleep_hours() else FEED_MESSAGES).format(name=name)
     msg += f"\n🥣 از: **{_item_label(item, effect)}**\n🔋 باقی‌مانده این بسته: `{left}`"
     if leveled:
         msg += f"\n🎉 Level Up → **{level}**!"
@@ -427,6 +483,21 @@ async def action_pet(user_id):
     return msg + "\n\n" + pet_card(pet), pet_home_kb(True)
 
 
+async def action_force_wake(user_id):
+    pet = await get_pet(user_id)
+    if not pet:
+        return "❌ پت نداری.", pet_home_kb(False)
+    name = pet.get("pet_name") or "Pet"
+    # بیدار اجباری در شب: mood/energy کمی کم
+    energy = max(0, int(pet.get("energy") or 50) - 10)
+    mood = max(0, int(pet.get("mood") or 70) - 8)
+    dirt = _maybe_dirty(pet)
+    await update_pet(user_id, is_sleeping=False, sleep_until=0, energy=energy, mood=mood, dirtiness=dirt)
+    pet = await get_pet(user_id)
+    msg = random.choice(SLEEPY_MESSAGES).format(name=name)
+    return msg + "\n\n" + pet_card(pet), pet_home_kb(True)
+
+
 async def action_sleep(user_id):
     pet = await get_pet(user_id)
     if not pet or pet.get("awaiting_name"):
@@ -461,7 +532,8 @@ async def action_sleep(user_id):
     from database.inventory import consume_use
     ok, left, _ = await consume_use(user_id, item["item_id"], 1)
     if not ok:
-        return "❌ جای خواب فرسوده شده. یکی جدید از فروشگاه بخر.", pet_home_kb(True)
+        return ("🛏 تخت خراب شده!\nدکمه **🔧 تعمیر تخت** را بزن (حدود ۲۰ کوین).\n"
+                "یا از فروشگاه جای خواب جدید بخر."), pet_home_kb(True)
 
     effect = _as_dict(meta)
     energy_bonus = int(effect.get("energy") or PET_SLEEP_ENERGY)
@@ -531,6 +603,45 @@ async def action_gift(user_id):
 
 
 
+
+async def action_bath(user_id):
+    pet = await get_pet(user_id)
+    if not pet or pet.get("awaiting_name"):
+        return "❌ اول Pet بساز!", pet_home_kb(False)
+    item, meta, err = await _need_item(user_id, "bath", "حموم")
+    if err:
+        return err
+    from database.inventory import consume_use
+    ok, left, _ = await consume_use(user_id, item["item_id"], 1)
+    if not ok:
+        return "❌ صابون تموم شده.", pet_home_kb(True)
+    effect = _as_dict(meta)
+    clean = int(effect.get("cleanliness") or 30)
+    dirt = max(0, int(pet.get("dirtiness") or 20) - clean)
+    mood = clamp(int(pet.get("mood") or 70) + int(effect.get("mood") or 2))
+    await update_pet(user_id, dirtiness=dirt, mood=mood, last_bath=time.time())
+    name = pet.get("pet_name") or "Pet"
+    pet = await get_pet(user_id)
+    return f"🛁 {name} حموم شد! کثیفی کم شد.\n\n" + pet_card(pet), pet_home_kb(True)
+
+
+async def action_repair_bed(user_id):
+    from database.inventory import get_inventory, repair_item
+    inv = await get_inventory(user_id)
+    bed = None
+    for it in inv or []:
+        if (it.get("item_type") or "") != "bed":
+            continue
+        meta = _as_dict(it.get("meta") or {})
+        if meta.get("needs_repair") or int(meta.get("uses_left") or 0) <= 0:
+            bed = it
+            break
+    if not bed:
+        return "🛏 تختی برای تعمیر نیست (یا هنوز سالم است).", pet_home_kb(True)
+    ok, msg = await repair_item(user_id, bed["item_id"])
+    return msg, pet_home_kb(True)
+
+
 async def handle_pet_callback(user_id, data: str, first_name="", username=""):
     await ensure_user(user_id, first_name, username)
 
@@ -568,6 +679,14 @@ async def handle_pet_callback(user_id, data: str, first_name="", username=""):
 
     if data == "pet:sleep":
         return await action_sleep(user_id)
+    if data == "pet:bath":
+        return await action_bath(user_id)
+    if data == "pet:repair_bed":
+        return await action_repair_bed(user_id)
+    if data == "pet:wake_yes":
+        return await action_force_wake(user_id)
+    if data == "pet:wake_no":
+        return "💤 باشه، بذاریم بخوابه...", pet_home_kb(True)
 
     if data == "pet:gift":
         return await action_gift(user_id)

@@ -183,6 +183,13 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Boss scheduler: {e}")
 
+    try:
+        from pet.night_schedule import start_night_scheduler
+        start_night_scheduler(bot)
+        print("✅ Pet night sleep scheduler")
+    except Exception as e:
+        print(f"⚠️ Night scheduler: {e}")
+
     print(f"👑 Owner: {OWNER_ID}")
     print("=" * 55)
 
@@ -553,7 +560,7 @@ async def on_message(message: Message):
                                 await spawn_pumpkin_event(bot, str(chat_id))
                             elif r < 0.11:
                                 from halloween.handlers import spawn_boss
-                                await spawn_boss(bot, str(chat_id))
+                                await spawn_boss(bot, str(chat_id))  # only group context reaches here
                     except Exception as _hw_e:
                         logger.debug(f"halloween spawn: {_hw_e}")
             return

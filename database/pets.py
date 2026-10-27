@@ -9,7 +9,26 @@ def _d(row):
     return dict(row) if row else None
 
 
+_pet_cols_ready = False
+
+async def ensure_pet_columns():
+    """Migration امن برای ستون‌های جدید pet."""
+    global _pet_cols_ready
+    if _pet_cols_ready:
+        return
+    try:
+        await execute("ALTER TABLE pets ADD COLUMN IF NOT EXISTS dirtiness INTEGER DEFAULT 20")
+        await execute("ALTER TABLE pets ADD COLUMN IF NOT EXISTS last_bath DOUBLE PRECISION DEFAULT 0")
+        await execute("ALTER TABLE pets ADD COLUMN IF NOT EXISTS night_sleep_notified DATE")
+        await execute("ALTER TABLE pets ADD COLUMN IF NOT EXISTS night_wake_notified DATE")
+    except Exception:
+        pass
+
+
+_pet_cols_ready = False
+
 async def get_pet(user_id: int):
+    await ensure_pet_columns()
     return _d(await fetchrow("SELECT * FROM pets WHERE user_id = $1", int(user_id)))
 
 

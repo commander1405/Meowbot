@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS pets (
     last_random         DOUBLE PRECISION DEFAULT 0,
     awaiting_name       BOOLEAN DEFAULT TRUE,
     last_point_claim    DOUBLE PRECISION DEFAULT 0,
+    dirtiness           INTEGER DEFAULT 20,
+    last_bath           DOUBLE PRECISION DEFAULT 0,
     created_at          TIMESTAMPTZ DEFAULT NOW()
 );
 

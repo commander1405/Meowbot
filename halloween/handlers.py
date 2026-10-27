@@ -605,11 +605,25 @@ async def _boss_attack(user_id: int, boss_id: int, first_name: str = "", chat_id
     attacks = int((fat or {}).get("attacks") or 0)
     recover_at = float((fat or {}).get("recover_at") or 0)
     limit = BOSS_FATIGUE_LIMIT_BASE
+    try:
+        from database.inventory import find_usable_item, consume_use
+        pot, _ = await find_usable_item(user_id, "boss_potion")
+        if pot:
+            ok_p, _, _ = await consume_use(user_id, pot["item_id"], 1)
+            if ok_p:
+                limit = BOSS_FATIGUE_LIMIT_BASE + 3
+    except Exception:
+        pass
     u = await get_user(user_id)
     gym = int((u or {}).get("gym_level") or 1)
     limit += max(0, (gym - 1) // 5)
     if recover_at > now:
-        return f"😮‍💨 خسته‌ای. {int(recover_at - now)} ثانیه صبر کن.", None
+        return (
+            f"😮‍💨 خسته شدی... یکم صبر کن.\n"
+            f"⏳ حدود `{int(recover_at - now)}` ثانیه تا ریکاوری\n"
+            f"یا از فروشگاه **پوشن خستگی** بخر.",
+            None,
+        )
     if attacks >= limit:
         rec = now + BOSS_FATIGUE_RECOVERY_SEC
         if await hwdb.get_active_skin(user_id) == SKIN_GHOST:
@@ -628,6 +642,16 @@ async def _boss_attack(user_id: int, boss_id: int, first_name: str = "", chat_id
     pet_lv = int((pet or {}).get("level") or 1) if pet and not pet.get("awaiting_name") else 1
     dmg = BOSS_BASE_DAMAGE + gym * BOSS_DAMAGE_PER_GYM + pet_lv * BOSS_DAMAGE_PER_PET_LV
     dmg = min(BOSS_MAX_DAMAGE, max(10, dmg + random.randint(-8, 12)))
+    # شمشیر روح: دابل دمیج (مصرف ۱ استفاده)
+    try:
+        from database.inventory import find_usable_item, consume_use
+        sword, smeta = await find_usable_item(user_id, "boss_sword")
+        if sword:
+            ok_s, _, _ = await consume_use(user_id, sword["item_id"], 1)
+            if ok_s:
+                dmg = min(BOSS_MAX_DAMAGE * 2, dmg * 2)
+    except Exception:
+        pass
 
     row = await fetchrow(
         """

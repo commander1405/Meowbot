@@ -143,11 +143,21 @@ async def consume_use(user_id: int, item_id: str, amount: int = 1) -> tuple:
                 )
                 return True, 0, "مصرف شد"
 
+            if meta.get("needs_repair"):
+                return False, 0, "نیاز به تعمیر"
             uses = int(uses or 0)
             if uses < amount:
                 return False, uses, "مصرف باقی‌مانده کافی نیست"
             uses -= amount
             meta["uses_left"] = uses
+            if uses <= 0 and meta.get("repairable"):
+                meta["uses_left"] = 0
+                meta["needs_repair"] = True
+                await conn.execute(
+                    "UPDATE inventory SET meta = $3::jsonb WHERE user_id = $1 AND item_id = $2",
+                    int(user_id), item_id, json.dumps(meta),
+                )
+                return True, 0, "خراب شد — نیاز به تعمیر"
             if uses <= 0:
                 await conn.execute(
                     "DELETE FROM inventory WHERE user_id = $1 AND item_id = $2",
@@ -269,20 +279,17 @@ async def purchase_shop_item(user_id: int, item_id: str) -> tuple:
 
 
 async def find_usable_item(user_id: int, item_type: str):
-    """اولین آیتم از نوع مشخص که هنوز uses دارد."""
     rows = await get_inventory(user_id)
     for r in rows:
         if (r.get("item_type") or "") != item_type:
             continue
         meta = _meta(r)
+        if meta.get("needs_repair"):
+            continue
         uses = meta.get("uses_left")
-        if uses is None:
-            # quantity-based
-            if int(r.get("quantity") or 0) > 0:
-                return r, meta
-        elif int(uses) > 0:
+        if uses is None or int(uses) > 0:
             return r, meta
-    return None, {}
+    return None, None
 
 
 async def has_item_type(user_id: int, item_type: str) -> bool:
@@ -306,139 +313,137 @@ async def has_item_id(user_id: int, item_id: str) -> bool:
 # effect: اثر روی Pet
 
 PET_SHOP_CATALOG = [
-    # ─── غذا ─────────────────────────────────────────────
-    # ارزان، دوام بالا، اثر کم
+    # غذا — هر خرید = یک وعده (۱ بار مصرف)
     {
         "item_id": "food_kibble",
         "name": "🥣 خوراک خشک",
-        "description": "غذای روزمره. هر وعده کمی گرسنگی را کم می‌کند. بسته بزرگ، مناسب مصرف مداوم.",
-        "price": 35,
+        "description": "یک وعده ساده. فقط ۱ بار مصرف می‌شود.",
+        "price": 12,
         "rarity": "common",
         "item_type": "food",
-        "effect": {"hunger": 18, "mood": 1, "max_uses": 40},
+        "effect": {"hunger": 12, "mood": 1, "max_uses": 1},
     },
-    # متوسط: طعم بهتر + رابطه
     {
         "item_id": "food_fish",
         "name": "🐟 ماهی تازه",
-        "description": "ماهی واقعی. گرسنگی را خوب کم می‌کند و کمی رابطه را بالا می‌برد. بسته متوسط.",
-        "price": 75,
+        "description": "یک وعده ماهی. ۱ بار مصرف.",
+        "price": 28,
         "rarity": "rare",
         "item_type": "food",
-        "effect": {"hunger": 35, "relationship": 4, "mood": 4, "max_uses": 15},
+        "effect": {"hunger": 22, "relationship": 2, "mood": 3, "max_uses": 1},
     },
-    # گران، کم‌تعداد، قوی + XP
     {
         "item_id": "food_premium",
         "name": "🍣 سوشی ویژه",
-        "description": "وعده لوکس. گرسنگی زیاد، خلق‌وخو و XP. تعداد کم — برای موقعیت خاص.",
-        "price": 140,
+        "description": "وعده لوکس یک‌نفره. ۱ بار مصرف.",
+        "price": 55,
         "rarity": "epic",
         "item_type": "food",
-        "effect": {"hunger": 55, "mood": 10, "relationship": 8, "xp": 12, "max_uses": 6},
+        "effect": {"hunger": 35, "mood": 6, "relationship": 4, "xp": 6, "max_uses": 1},
     },
-    # خیلی قوی، خیلی کم
     {
         "item_id": "food_steak",
         "name": "🥩 استیک گربه",
-        "description": "یک وعده سنگین. تقریباً گرسنگی را پر می‌کند و روحیه را قوی بالا می‌برد.",
-        "price": 95,
+        "description": "وعده سنگین. ۱ بار مصرف.",
+        "price": 40,
         "rarity": "epic",
         "item_type": "food",
-        "effect": {"hunger": 70, "mood": 12, "relationship": 6, "xp": 6, "max_uses": 3},
+        "effect": {"hunger": 40, "mood": 7, "relationship": 3, "xp": 4, "max_uses": 1},
     },
-    # ─── اسباب‌بازی ──────────────────────────────────────
+    # اسباب‌بازی — دوام محدود
     {
         "item_id": "toy_ball",
         "name": "🎾 توپ ساده",
-        "description": "توپ پارچه‌ای مقاوم. بازی سبک، انرژی کم، دوام بالا.",
-        "price": 40,
+        "description": "حدود ۱۲ بار بازی دوام می‌آورد.",
+        "price": 35,
         "rarity": "common",
         "item_type": "toy",
-        "effect": {"energy": 10, "mood": 4, "xp": 4, "play_kind": "ball", "max_uses": 30},
+        "effect": {"energy": 6, "mood": 3, "xp": 2, "play_kind": "ball", "max_uses": 12},
     },
     {
         "item_id": "toy_mouse",
         "name": "🐭 موش پارچه‌ای",
-        "description": "شکار ساختگی. انرژی و رابطه متوسط. دوام متوسط.",
-        "price": 65,
+        "description": "حدود ۸ بار بازی.",
+        "price": 50,
         "rarity": "rare",
         "item_type": "toy",
-        "effect": {"energy": 18, "relationship": 7, "mood": 7, "xp": 7, "play_kind": "yarn", "max_uses": 12},
+        "effect": {"energy": 10, "relationship": 4, "mood": 4, "xp": 4, "play_kind": "yarn", "max_uses": 8},
     },
     {
         "item_id": "toy_laser",
         "name": "🔴 لیزر دستی",
-        "description": "سرگرمی شدید. XP و خلق‌وخو بالا، ولی باتری محدود است.",
-        "price": 110,
+        "description": "باتری محدود — ۵ جلسه بازی.",
+        "price": 85,
         "rarity": "epic",
         "item_type": "toy",
-        "effect": {"energy": 28, "mood": 14, "xp": 14, "play_kind": "laser", "max_uses": 8},
+        "effect": {"energy": 14, "mood": 8, "xp": 7, "play_kind": "laser", "max_uses": 5},
     },
-    {
-        "item_id": "toy_feather",
-        "name": "🪶 چوب پر",
-        "description": "بازی آرام با صاحب. رابطه را خوب بالا می‌برد؛ دوام متوسط.",
-        "price": 55,
-        "rarity": "rare",
-        "item_type": "toy",
-        "effect": {"energy": 12, "relationship": 10, "mood": 6, "xp": 5, "play_kind": "yarn", "max_uses": 18},
-    },
-    # ─── جای خواب (الزامی برای خواب) ─────────────────────
+    # جای خواب — دائمی تا خرابی؛ بعد تعمیر
     {
         "item_id": "bed_basic",
         "name": "🛏 تشک ساده",
-        "description": "بدون جای خواب نمی‌توانی بخوابانی. انرژی معمولی، دوام خوب.",
+        "description": "حدود ۳۵ خواب دوام دارد؛ بعد باید تعمیر شود (۲۰ کوین).",
         "price": 80,
         "rarity": "common",
         "item_type": "bed",
-        "effect": {"energy": 35, "sleep_bonus_sec": 0, "max_uses": 25},
+        "effect": {"energy": 22, "sleep_bonus_sec": 0, "max_uses": 35, "repairable": True, "repair_cost": 20},
     },
     {
         "item_id": "bed_cozy",
         "name": "🧺 سبد نرم",
-        "description": "خواب راحت‌تر. انرژی بیشتر و کمی خلق‌وخو. دوام متوسط.",
-        "price": 130,
+        "description": "حدود ۴۰ خواب؛ قابل تعمیر با ۲۵ کوین.",
+        "price": 120,
         "rarity": "rare",
         "item_type": "bed",
-        "effect": {"energy": 50, "mood": 6, "sleep_bonus_sec": 30, "max_uses": 12},
+        "effect": {"energy": 28, "sleep_bonus_sec": 30, "mood": 3, "max_uses": 40, "repairable": True, "repair_cost": 25},
     },
+    # هدیه
     {
-        "item_id": "bed_luxury",
-        "name": "👑 جای خواب لوکس",
-        "description": "بهترین استراحت. انرژی قوی، خلق‌وخو، رابطه. تعداد استفاده کم.",
-        "price": 200,
-        "rarity": "epic",
-        "item_type": "bed",
-        "effect": {"energy": 70, "mood": 12, "relationship": 5, "sleep_bonus_sec": 60, "max_uses": 5},
-    },
-    # ─── هدیه ────────────────────────────────────────────
-    {
-        "item_id": "gift_flower",
-        "name": "🌸 گل کوچک",
-        "description": "هدیه ساده. کمی رابطه و خلق‌وخو. بسته چندتایی.",
-        "price": 45,
+        "item_id": "gift_ribbon",
+        "name": "🎀 روبان",
+        "description": "هدیه کوچک. ۱ بار.",
+        "price": 30,
         "rarity": "common",
         "item_type": "gift",
-        "effect": {"relationship": 8, "mood": 5, "xp": 2, "max_uses": 12},
-    },
-    {
-        "item_id": "gift_collar",
-        "name": "🎀 گردنبند زنگوله‌دار",
-        "description": "هدیه ماندگارتر. رابطه قوی‌تر. تعداد محدود.",
-        "price": 100,
-        "rarity": "rare",
-        "item_type": "gift",
-        "effect": {"relationship": 18, "mood": 10, "xp": 8, "max_uses": 4},
+        "effect": {"relationship": 8, "mood": 5, "max_uses": 1},
     },
     {
         "item_id": "gift_diamond",
         "name": "💎 نشان ویژه",
-        "description": "کمیاب. جهش بزرگ در رابطه و XP. فقط چند بار.",
-        "price": 220,
+        "description": "هدیه لوکس. ۱ بار.",
+        "price": 150,
         "rarity": "legendary",
         "item_type": "gift",
-        "effect": {"relationship": 30, "mood": 15, "xp": 25, "max_uses": 2},
+        "effect": {"relationship": 18, "mood": 10, "xp": 12, "max_uses": 1},
+    },
+    # مبارزه با روح
+    {
+        "item_id": "boss_sword",
+        "name": "⚔️ شمشیر روح",
+        "description": "هر ضربه به روح ۲ برابر قوی‌تر می‌شود. ۵ استفاده.",
+        "price": 120,
+        "rarity": "epic",
+        "item_type": "boss_sword",
+        "effect": {"max_uses": 5, "boss_damage_mult": 2},
+    },
+    {
+        "item_id": "boss_potion",
+        "name": "🧪 پوشن خستگی",
+        "description": "هر بار حمله، خستگی کمتر می‌شود (+۳ ضربه مجاز). ۴ استفاده.",
+        "price": 90,
+        "rarity": "rare",
+        "item_type": "boss_potion",
+        "effect": {"max_uses": 4, "fatigue_bonus": 3},
+    },
+    # حمام
+    {
+        "item_id": "bath_soap",
+        "name": "🧼 صابون گربه",
+        "description": "یک بار حموم — کثیفی را کم می‌کند.",
+        "price": 22,
+        "rarity": "common",
+        "item_type": "bath",
+        "effect": {"cleanliness": 35, "mood": 2, "max_uses": 1},
     },
 ]
 
@@ -473,3 +478,29 @@ async def get_shop_items():
 async def get_shop_item(item_id: str):
     row = await fetchrow("SELECT * FROM shop_items WHERE item_id = $1", item_id)
     return dict(row) if row else None
+
+
+async def repair_item(user_id: int, item_id: str) -> tuple:
+    """تعمیر آیتم repairable. Returns (ok, message)."""
+    from database.users import spend_meow_coins
+    row = await fetchrow(
+        "SELECT * FROM inventory WHERE user_id=$1 AND item_id=$2",
+        int(user_id), item_id,
+    )
+    if not row:
+        return False, "این آیتم را نداری."
+    meta = _meta(dict(row))
+    if not meta.get("needs_repair") and int(meta.get("uses_left") or 0) > 0:
+        return False, "نیازی به تعمیر نیست."
+    cost = int(meta.get("repair_cost") or 20)
+    max_u = int(meta.get("max_uses") or 30)
+    ok = await spend_meow_coins(user_id, cost)
+    if not ok:
+        return False, f"کوین کافی نیست. هزینه تعمیر: `{cost}` 🪙"
+    meta["needs_repair"] = False
+    meta["uses_left"] = max_u
+    await execute(
+        "UPDATE inventory SET meta=$3::jsonb WHERE user_id=$1 AND item_id=$2",
+        int(user_id), item_id, json.dumps(meta),
+    )
+    return True, f"✅ تعمیر شد! دوام دوباره `{max_u}` — هزینه `{cost}` 🪙"
