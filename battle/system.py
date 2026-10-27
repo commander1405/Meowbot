@@ -33,6 +33,52 @@ def power_from_gym(level: int) -> int:
     return 10 + int(level) * 3
 
 
+
+def gym_upgrade_cost(level: int) -> int:
+    level = int(level)
+    if level >= MAX_GYM_LEVEL:
+        return 0
+    return level * 5
+
+
+async def upgrade_gym(user_id: int) -> tuple:
+    """ارتقای باشگاه با meow_points. (ok, message)"""
+    from database.pool import fetchrow
+    from database.users import get_meow_points
+    row = await fetchrow(
+        """
+        UPDATE users SET
+            meow_points = meow_points - (gym_level * 5),
+            gym_level = gym_level + 1,
+            updated_at = NOW()
+        WHERE user_id = $1
+          AND gym_level < $2
+          AND meow_points >= (gym_level * 5)
+        RETURNING gym_level, meow_points
+        """,
+        int(user_id), int(MAX_GYM_LEVEL),
+    )
+    if not row:
+        u = await get_user(user_id) or {}
+        gym = int(u.get("gym_level") or 1)
+        pts = int(u.get("meow_points") or 0)
+        if gym >= MAX_GYM_LEVEL:
+            return False, f"🏋️ به سقف باشگاه رسیدی (`{MAX_GYM_LEVEL}`)."
+        cost = gym_upgrade_cost(gym)
+        return False, (
+            f"❌ امتیاز کافی نیست.\n"
+            f"سطح: `{gym}` | هزینه: `{cost}` ⭐ | موجودی: `{pts}`"
+        )
+    gym = int(row["gym_level"])
+    pts = int(row["meow_points"])
+    return True, (
+        f"🏋️ **باشگاه ارتقا یافت!**\n"
+        f"سطح جدید: `{gym}`\n"
+        f"قدرت: `{power_from_gym(gym)}`\n"
+        f"امتیاز باقی: `{pts}` ⭐"
+    )
+
+
 def fmt_cd(sec):
     sec = max(0, int(sec))
     m, s = divmod(sec, 60)
@@ -287,12 +333,19 @@ async def handle_battle_callback(user_id, data, first_name=""):
     if data == "battle:gym":
         u = await get_user(user_id) or {}
         gym = int(u.get("gym_level") or 1)
+        cost = gym_upgrade_cost(gym)
+        pts = int(u.get("meow_points") or 0)
         return (
-            f"🏋️ **باشگاه**\nسطح فعلی: `{gym}` / `{MAX_GYM_LEVEL}`\n"
+            f"🏋️ **باشگاه نفرین‌شده**\n"
+            f"سطح: `{gym}` / `{MAX_GYM_LEVEL}`\n"
             f"قدرت: `{power_from_gym(gym)}`\n"
-            f"از دستورات Owner برای ارتقا استفاده کن.",
-            gym_kb() if 'gym_kb' in dir() else battle_menu_kb(),
+            f"هزینه ارتقا: `{cost}` ⭐ | موجودی: `{pts}`\n"
+            f"یا بنویس: `ارتقا باشگاه`",
+            gym_kb(),
         )
+    if data == "battle:gym_up":
+        ok, msg = await upgrade_gym(user_id)
+        return msg, gym_kb()
     return await battle_home_text(user_id), battle_menu_kb()
 
 

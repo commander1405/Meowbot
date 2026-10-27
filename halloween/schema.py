@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS halloween_user (
 CREATE TABLE IF NOT EXISTS halloween_group_meta (
     chat_id         TEXT PRIMARY KEY,
     last_pumpkin_at DOUBLE PRECISION DEFAULT 0,
-    last_boss_at    DOUBLE PRECISION DEFAULT 0
+    last_boss_at    DOUBLE PRECISION DEFAULT 0,
+    next_boss_at    DOUBLE PRECISION DEFAULT 0
 );
 """
 
@@ -86,4 +87,8 @@ async def ensure_halloween_schema() -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(SQL)
+        # migration امن برای دیتابیس‌های قبلی
+        await conn.execute(
+            "ALTER TABLE halloween_group_meta ADD COLUMN IF NOT EXISTS next_boss_at DOUBLE PRECISION DEFAULT 0"
+        )
     logger.info("Halloween schema ready")

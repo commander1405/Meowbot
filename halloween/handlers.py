@@ -529,7 +529,10 @@ async def _pick_pumpkin(user_id: int, event_id: int, first_name: str = "", bot=N
 
 
 # ---------- boss ----------
-async def spawn_boss(bot, chat_id: str) -> bool:
+async def spawn_boss(bot, chat_id: str, *, update_schedule: bool = True) -> bool:
+    """اسپان باس در یک گروه. در صورت موفقیت True.
+    update_schedule=False وقتی اسکجولر خودش claim کرده باشد.
+    """
     if not event_active():
         return False
     active = await fetchval(
@@ -553,6 +556,12 @@ async def spawn_boss(bot, chat_id: str) -> bool:
         mid = str(getattr(msg, "message_id", None) or getattr(msg, "id", "") or "")
         if mid:
             await execute("UPDATE halloween_boss SET message_id=$2 WHERE id=$1", bid, mid)
+        if update_schedule:
+            try:
+                from halloween.scheduler import mark_boss_spawned
+                await mark_boss_spawned(str(chat_id))
+            except Exception as se:
+                logger.debug("mark schedule: %s", se)
         return True
     except Exception as e:
         logger.warning("boss spawn: %s", e)

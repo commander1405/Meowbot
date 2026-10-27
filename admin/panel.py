@@ -88,13 +88,29 @@ def settings_hub_kb():
 
 
 async def halloween_owner_kb():
-    from halloween.event_settings import event_active, event_status_text
+    from halloween.event_settings import event_active
     on = event_active()
     toggle = ("🎃 خاموش‌کردن هالووین", "owner:hw_off_ask") if on else ("👻 فعال‌کردن هالووین", "owner:hw_on")
     return _kb([
         [toggle],
+        [("👻 مدیریت باس", "owner:boss_menu")],
         [("ℹ️ وضعیت", "owner:halloween")],
         [("🔙 منوی Owner", "owner:home")],
+    ])
+
+
+def boss_menu_kb():
+    return _kb([
+        [("🌍 فرستادن باس فایت به همه گروه‌ها", "owner:boss_all_ask")],
+        [("🔍 باس برای یک گروه", "owner:boss_find")],
+        [("🔙 رویداد", "owner:halloween")],
+    ])
+
+
+def boss_all_confirm_kb():
+    return _kb([
+        [("🔴 بله، به همه بفرست", "owner:boss_all_yes")],
+        [("🔙 انصراف", "owner:boss_menu")],
     ])
 
 
@@ -256,6 +272,120 @@ async def handle_owner_callback(bot, callback, data: str):
         await set_event_enabled(True)
         kb = await halloween_owner_kb()
         await _edit(msg, "🎃 هالووین دوباره فعال شد.", kb)
+        return
+
+    if action == "boss_menu":
+        from halloween.event_settings import event_active
+        if not event_active():
+            await _edit(msg, "🔇 هالووین خاموش است.\nاول رویداد را فعال کن.", await halloween_owner_kb())
+            return
+        await _edit(msg, "👻 **مدیریت باس روح**\nاسپان دستی برای یک گروه یا همه.", boss_menu_kb())
+        return
+
+    if action == "boss_find":
+        from halloween.event_settings import event_active
+        if not event_active():
+            await _edit(msg, "🔇 هالووین خاموش است. اول رویداد را فعال کن.", await halloween_owner_kb())
+            return
+        _pending[user_id] = {"action": "boss_group_find"}
+        await _edit(msg, "🔍 آیدی یا بخشی از نام گروه را بفرست:", back_nav())
+        return
+
+    if action.startswith("boss_one_ask:"):
+        from halloween.event_settings import event_active
+        if not event_active():
+            await _edit(msg, "🔇 هالووین خاموش است.", await halloween_owner_kb())
+            return
+        cid = action.split(":", 1)[1]
+        g = await get_group(cid)
+        title = (g or {}).get("title") or cid
+        await _edit(
+            msg,
+            f"🎃 **فرستادن باس فایت**\nگروه: **{title}**\n`{cid}`\nتأیید می‌کنی؟",
+            _kb([
+                [("🎃 بله، بفرست", f"owner:boss_one_yes:{cid}")],
+                [("🔙 انصراف", "owner:boss_menu")],
+            ]),
+        )
+        return
+
+    if action.startswith("boss_one_yes:"):
+        from halloween.event_settings import event_active
+        if not event_active():
+            await _edit(msg, "🔇 هالووین خاموش است.", await halloween_owner_kb())
+            return
+        cid = action.split(":", 1)[1]
+        active = await fetchval(
+            "SELECT id FROM halloween_boss WHERE chat_id=$1 AND active=TRUE LIMIT 1",
+            str(cid),
+        )
+        if active:
+            await _edit(msg, f"⚠️ این گروه همین حالا باس فعال دارد.\n`{cid}`", boss_menu_kb())
+            return
+        from halloween.handlers import spawn_boss
+        ok = await spawn_boss(bot, str(cid), update_schedule=True)
+        if ok:
+            await _edit(msg, f"✅ باس فایت به گروه `{cid}` ارسال شد.", boss_menu_kb())
+        else:
+            await _edit(msg, f"❌ ارسال نشد (ربات در گروه نیست یا خطای API).\n`{cid}`", boss_menu_kb())
+        return
+
+    if action == "boss_all_ask":
+        from halloween.event_settings import event_active
+        if not event_active():
+            await _edit(msg, "🔇 هالووین خاموش است. اول رویداد را فعال کن.", await halloween_owner_kb())
+            return
+        groups = await get_all_groups()
+        n = len(groups or [])
+        await _edit(
+            msg,
+            f"🌍 **باس فایت برای همه گروه‌ها**\n"
+            f"تعداد گروه ثبت‌شده: `{n}`\n"
+            f"گروه‌هایی که باس فعال دارند رد می‌شوند.\n"
+            f"ممکن است چند دقیقه طول بکشد.",
+            boss_all_confirm_kb(),
+        )
+        return
+
+    if action == "boss_all_yes":
+        from halloween.event_settings import event_active
+        if not event_active():
+            await _edit(msg, "🔇 هالووین خاموش است.", await halloween_owner_kb())
+            return
+        await _edit(msg, "⏳ در حال ارسال باس به گروه‌ها…", boss_menu_kb())
+        groups = await get_all_groups()
+        from halloween.handlers import spawn_boss
+        import asyncio as _aio
+        sent = skipped = failed = 0
+        for g in groups or []:
+            if not event_active():
+                break
+            cid = str(g.get("chat_id") or "")
+            if not cid:
+                continue
+            try:
+                active = await fetchval(
+                    "SELECT id FROM halloween_boss WHERE chat_id=$1 AND active=TRUE LIMIT 1",
+                    cid,
+                )
+                if active:
+                    skipped += 1
+                    continue
+                ok = await spawn_boss(bot, cid, update_schedule=True)
+                if ok:
+                    sent += 1
+                else:
+                    failed += 1
+            except Exception:
+                failed += 1
+            await _aio.sleep(0.4)
+        try:
+            await bot.send_message(
+                user_id,
+                f"✅ **گزارش باس همگانی**\nموفق: `{sent}`\nرد (فعال): `{skipped}`\nناموفق: `{failed}`",
+            )
+        except Exception:
+            pass
         return
 
     # --- Ads (MEGA-style single promo button) ---
@@ -1031,7 +1161,46 @@ async def handle_owner_text(bot, message, user_id: int, text: str) -> bool:
         return True
 
     try:
+        if action == "boss_group_find":
+            q = text.strip()
+            groups = await get_all_groups()
+            matches = []
+            for g in groups or []:
+                cid = str(g.get("chat_id") or "")
+                title = str(g.get("title") or "")
+                uname = str(g.get("username") or "")
+                if q == cid or q in cid or q.lower() in title.lower() or (uname and q.lower() in uname.lower()):
+                    matches.append(g)
+            if not matches:
+                await message.reply("❌ گروهی پیدا نشد.", components=back_nav())
+                return True
+            if len(matches) == 1:
+                g = matches[0]
+                cid = str(g.get("chat_id"))
+                title = g.get("title") or cid
+                _pending.pop(user_id, None)
+                await message.reply(
+                    f"🎃 گروه انتخاب شد: **{title}**\n`{cid}`\nفرستادن باس؟",
+                    components=_kb([
+                        [("🎃 فرستادن باس فایت", f"owner:boss_one_ask:{cid}")],
+                        [("🔙 مدیریت باس", "owner:boss_menu")],
+                    ]),
+                )
+                return True
+            lines = ["🔍 چند گروه پیدا شد (حداکثر ۵):"]
+            rows = []
+            for g in matches[:5]:
+                cid = str(g.get("chat_id"))
+                title = (g.get("title") or cid)[:28]
+                lines.append(f"• {title} — `{cid}`")
+                rows.append([(f"🎃 {title}", f"owner:boss_one_ask:{cid}")])
+            rows.append([("🔙 مدیریت باس", "owner:boss_menu")])
+            _pending.pop(user_id, None)
+            await message.reply("\n".join(lines), components=_kb(rows))
+            return True
+
         if action == "find_user":
+
             from database.users import resolve_user_ref
             from admin.users_mgmt import user_card, set_um_back
             ref = text.split()[0] if text.split() else text

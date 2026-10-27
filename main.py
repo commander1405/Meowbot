@@ -176,6 +176,13 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Season scheduler: {e}")
 
+    try:
+        from halloween.scheduler import start_boss_scheduler
+        start_boss_scheduler(bot)
+        print("✅ Halloween boss scheduler")
+    except Exception as e:
+        print(f"⚠️ Boss scheduler: {e}")
+
     print(f"👑 Owner: {OWNER_ID}")
     print("=" * 55)
 
@@ -551,7 +558,20 @@ async def on_message(message: Message):
                         logger.debug(f"halloween spawn: {_hw_e}")
             return
 
+        # ---- ارتقا باشگاه با متن ----
+        norm_gym = text.replace(" ", "").replace("\u200c", "")
+        if text in ("ارتقا باشگاه", "ارتقای باشگاه", "ارتقاباشگاه", "/gymup", "gym up") or norm_gym in ("ارتقاباشگاه", "ارتقایباشگاه"):
+            from battle.system import upgrade_gym
+            from utils.keyboards import gym_kb
+            ok, msg = await upgrade_gym(int(user_id))
+            if private:
+                await message.reply(msg, components=gym_kb())
+            else:
+                await message.reply(msg)
+            return
+
         # ---- Text shortcuts (still open glass menu) ----
+
         shortcuts = {
             "پروفایل": "menu:profile", "profile": "menu:profile", "/profile": "menu:profile",
             "رنکینگ": "menu:rank", "رتبه": "menu:rank", "ranking": "menu:rank",
