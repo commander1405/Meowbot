@@ -329,7 +329,7 @@ async def on_message(message: Message):
                 from database.groups import register_group, register_group_user
                 await register_group(gid, title="", username="")
                 await register_group_user(int(user_id), gid)
-                                txt, kb = await show_group_list(int(user_id))
+                txt, kb = await show_group_list(int(user_id))
                 await message.reply(
                     f"✅ گروه `{gid}` به لیستت اضافه شد.\n\n" + txt,
                     components=kb,
