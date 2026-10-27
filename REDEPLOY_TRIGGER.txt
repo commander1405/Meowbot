@@ -1,1 +1,1 @@
-redeploy: ads manager + broadcast confirm 2026-10-27T13:27:17Z
+redeploy: fix broadcast state NameError 2026-10-27T13:36:04Z

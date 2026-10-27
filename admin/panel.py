@@ -1221,7 +1221,7 @@ async def handle_owner_text(bot, message, user_id: int, text: str) -> bool:
             return True
 
         if action == "bc_await":
-            target = state.get("bc_target") or "users"
+            target = pending.get("bc_target") or "users"
             label = {"users": "کاربران PV", "groups": "گروه‌ها", "all": "همه", "admins": "Adminها"}.get(target, target)
             # count recipients
             count = 0
@@ -1258,8 +1258,8 @@ async def handle_owner_text(bot, message, user_id: int, text: str) -> bool:
                     return True
                 await message.reply("برای ارسال بنویس `تأیید` یا برای لغو `لغو`.", components=back_nav())
                 return True
-            target = state.get("bc_target") or "users"
-            body = state.get("bc_text") or ""
+            target = pending.get("bc_target") or "users"
+            body = pending.get("bc_text") or ""
             sent = failed = 0
             destinations = []
             if target in ("users", "all"):
