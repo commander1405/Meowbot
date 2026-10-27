@@ -114,6 +114,13 @@ async def on_ready():
         traceback.print_exc()
 
     try:
+        from halloween.schema import ensure_halloween_schema
+        await ensure_halloween_schema()
+        print("✅ Halloween schema ready")
+    except Exception as e:
+        print(f"⚠️ Halloween schema: {e}")
+
+    try:
         from guides.scheduler import start_guide_scheduler
         start_guide_scheduler(bot)
         print("✅ Auto Guide scheduler")
@@ -489,6 +496,21 @@ async def on_message(message: Message):
                 await message.reply(msg, components=main_menu_kb())
             else:
                 await message.reply(msg)
+                # شانس اسپان هالووین در گروه (کدو / باس)
+                if ok and chat_id is not None:
+                    try:
+                        import random as _rnd
+                        from halloween.event_settings import event_active
+                        if event_active():
+                            r = _rnd.random()
+                            if r < 0.08:
+                                from halloween.handlers import spawn_pumpkin_event
+                                await spawn_pumpkin_event(bot, str(chat_id))
+                            elif r < 0.11:
+                                from halloween.handlers import spawn_boss
+                                await spawn_boss(bot, str(chat_id))
+                    except Exception as _hw_e:
+                        logger.debug(f"halloween spawn: {_hw_e}")
             return
 
         # ---- Text shortcuts (still open glass menu) ----
@@ -502,6 +524,7 @@ async def on_message(message: Message):
             "فروشگاه": "shop:home", "shop": "shop:home",
             "بازی": "games:home", "games": "games:home",
             "روزانه": "menu:daily", "daily": "menu:daily",
+            "هالووین": "hw:home", "halloween": "hw:home", "/halloween": "hw:home", "🎃": "hw:home",
         }
         key = text.lower() if text.isascii() else text
         if key in shortcuts or text in shortcuts:
@@ -544,6 +567,13 @@ async def _dispatch(user_id, data: str, first_name="", username="", chat_id=None
     # Menu
     if data.startswith("menu:") or data.startswith("act:") or data.startswith("rank:"):
         return await handle_menu_callback(user_id, data, first_name, chat_id=chat_id, private=private)
+
+    # Halloween
+    if data.startswith("hw:"):
+        from halloween.handlers import handle_hw_callback
+        return await handle_hw_callback(
+            user_id, data, first_name=first_name, chat_id=chat_id, bot=bot, message=None
+        )
 
     # Pet
     if data.startswith("pet:"):
@@ -1002,7 +1032,16 @@ async def on_callback(callback: CallbackQuery):
                 private = not bool(title)
         except Exception:
             pass
-        result = await _dispatch(user_id, data, first_name, username, chat_id=chat_id, private=private)
+
+        # Halloween group actions need message for in-place edit
+        if data.startswith("hw:"):
+            from halloween.handlers import handle_hw_callback
+            result = await handle_hw_callback(
+                user_id, data, first_name=first_name, chat_id=chat_id, bot=bot, message=msg
+            )
+        else:
+            result = await _dispatch(user_id, data, first_name, username, chat_id=chat_id, private=private)
+
         if isinstance(result, tuple) and len(result) >= 2:
             text, kb = result[0], result[1]
         elif isinstance(result, tuple) and len(result) == 1:
@@ -1011,6 +1050,18 @@ async def on_callback(callback: CallbackQuery):
             text, kb = result, main_menu_kb()
         else:
             text, kb = WELCOME, main_menu_kb()
+
+        # Group pumpkin/boss handlers may already have edited the message (kb is None + short ack)
+        if data.startswith("hw:") and (kb is None or text is None):
+            try:
+                await callback.answer(str(text or "✓")[:180])
+            except Exception:
+                pass
+            try:
+                reset_panel_owner(_owner_token)
+            except Exception:
+                pass
+            return
 
         ok = await _edit_or_reply(msg, text, kb)
         if not ok:

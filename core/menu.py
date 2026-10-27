@@ -38,6 +38,7 @@ GUIDE = (
     "⚔️ **Battle** با بقیه\n"
     "🏦 **بانک** واریز/برداشت/انتقال\n"
     "🎮 **بازی‌ها** و کوین جایزه\n"
+    "🎃 **هالووین**: کدو در گروه، باس روح، جادوگر، گردونه، شکلات شبانه\n"
     "📅 فصل‌ها ۱۵ روزه‌اند؛ فقط رنکینگ فصل ریست می‌شود\n"
     "💡 راهنمای خودکار هر ساعت در گروه\n"
     "━━━━━━━━━━━━━━\n"
@@ -53,6 +54,19 @@ async def profile_text(user_id, first_name=""):
     pet_line = "ندارد"
     if pet and not pet.get("awaiting_name"):
         pet_line = f"{pet.get('pet_name')} (Lv.{pet.get('level',1)})"
+    hw_line = ""
+    try:
+        from halloween import db as hwdb
+        from halloween.event_settings import SKIN_CATALOG
+        hu = await hwdb.ensure_hw_user(int(user_id))
+        skin = hu.get("active_skin") or ""
+        skin_name = (SKIN_CATALOG.get(skin) or {}).get("name") or "ندارد"
+        hw_line = (
+            f"🎃 کدو: `{hu.get('pumpkins_total', 0)}` | 🍫 شکلات: `{hu.get('chocolate', 0)}`\n"
+            f"⚔️ دمیج باس: `{hu.get('boss_damage', 0)}` | 🎭 اسکین: {skin_name}\n"
+        )
+    except Exception:
+        hw_line = ""
     return (
         f"🐱 **پروفایل {first_name or u.get('first_name') or 'کاربر'}**\n"
         f"━━━━━━━━━━━━━━\n"
@@ -65,6 +79,7 @@ async def profile_text(user_id, first_name=""):
         f"📊 کل میو: `{u.get('total_meows',0)}`\n"
         f"🔥 استریک روزانه: `{u.get('daily_streak',0)}`\n"
         f"🐾 Pet: {pet_line}\n"
+        f"{hw_line}"
         f"━━━━━━━━━━━━━━"
     ), profile_kb()
 

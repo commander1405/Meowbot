@@ -317,8 +317,13 @@ async def handle_owner_callback(bot, callback, data: str):
             await _edit(
                 msg,
                 "🔍 **پیدا کردن کاربر**\n"
-                "آیدی عددی کاربر را در چت بفرست:\n"
-                "مثال: `1967315238`",
+                "━━━━━━━━━━━━━━\n"
+                "آیدی عددی یا یوزرنیم را بفرست:\n"
+                "• `1967315238`\n"
+                "• `@commander04`\n"
+                "• `commander04`\n"
+                "━━━━━━━━━━━━━━\n"
+                "بعد از پیدا شدن می‌توانی بن / پیام خصوصی / سکه و … را بزنی.",
                 back_nav(),
             )
             return
@@ -898,32 +903,23 @@ async def handle_owner_text(bot, message, user_id: int, text: str) -> bool:
 
     try:
         if action == "find_user":
-            try:
-                tid = int(text.split()[0])
-            except ValueError:
-                await message.reply("❌ آیدی عددی بفرست.", components=back_nav())
-                return True
-            u = await get_user(tid)
+            from database.users import resolve_user_ref
+            from admin.users_mgmt import user_card, set_um_back
+            ref = text.split()[0] if text.split() else text
+            u = await resolve_user_ref(ref)
             if not u:
-                await message.reply(f"❌ کاربر `{tid}` پیدا نشد.", components=back_nav())
+                await message.reply(
+                    f"❌ کاربر `{ref}` پیدا نشد.\n"
+                    "آیدی عددی یا @یوزرنیم بفرست (کاربر باید حداقل یک‌بار با ربات تعامل داشته باشد).",
+                    components=back_nav(),
+                )
                 return True
-            pet = await get_pet(tid)
-            pet_line = "—"
-            if pet and not pet.get("awaiting_name"):
-                pet_line = f"{pet.get('pet_name')} Lv.{pet.get('level')}"
+            tid = int(u["user_id"])
+            set_um_back("owner:home")
+            card, kb = await user_card(tid)
             await message.reply(
-                f"👤 **User `{tid}`**\n"
-                f"━━━━━━━━━━━━━━\n"
-                f"نام: {u.get('first_name')}\n"
-                f"@{u.get('username') or '—'}\n"
-                f"🐾 Points: `{u.get('meow_points')}`\n"
-                f"🪙 Coins: `{u.get('meow_coins')}`\n"
-                f"🏋️ Gym: `{u.get('gym_level')}`\n"
-                f"⚔️ W/L: `{u.get('total_wins')}/{u.get('total_losses')}`\n"
-                f"🐱 Meows: `{u.get('total_meows')}`\n"
-                f"🐾 Pet: {pet_line}\n"
-                f"━━━━━━━━━━━━━━",
-                components=nav(),
+                f"✅ پیدا شد — از دکمه‌ها بن / پیام / سکه و … را بزن:\n\n{card}",
+                components=kb,
             )
             _pending.pop(user_id, None)
             return True

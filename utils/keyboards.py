@@ -104,12 +104,12 @@ def main_menu_kb():
         [("🐱 میو", "act:meow_info"), ("👤 پروفایل", "menu:profile")],
         [("🐾 Pet", "pet:home"), ("⚔️ Battle", "battle:home")],
         [("🏦 بانک", "bank:home"), ("🛒 فروشگاه", "shop:home")],
+        [("🎃 هالووین", "hw:home"), ("🎁 روزانه", "menu:daily")],
         [("🏆 رنکینگ", "menu:rank"), ("📅 فصل", "menu:season")],
         [("🎯 مأموریت", "menu:missions"), ("🏅 دستاورد", "menu:achieve")],
-        [("🎮 بازی‌ها", "games:home"), ("🎁 روزانه", "menu:daily")],
-        [("📖 راهنما", "menu:guide"), ("ℹ️ درباره", "menu:about")],
-        [("🐛 گزارش باگ", "menu:report"), ("🐱 گپ میو", "menu:global_group")],
-        [("⚙️ تنظیم گروه", "gset:list")],
+        [("🎮 بازی‌ها", "games:home"), ("📖 راهنما", "menu:guide")],
+        [("ℹ️ درباره", "menu:about"), ("🐛 گزارش باگ", "menu:report")],
+        [("🐱 گپ میو", "menu:global_group"), ("⚙️ تنظیم گروه", "gset:list")],
         [("🔙 بستن", "menu:close")],
     )
 

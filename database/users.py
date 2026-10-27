@@ -35,6 +35,35 @@ async def get_user(user_id: int, chat_id=None):
     return _row_to_dict(row)
 
 
+async def get_user_by_username(username: str):
+    """جستجو با یوزرنیم (با یا بدون @). case-insensitive."""
+    u = (username or "").strip().lstrip("@").lower()
+    if not u:
+        return None
+    row = await fetchrow(
+        "SELECT * FROM users WHERE LOWER(TRIM(LEADING '@' FROM COALESCE(username, ''))) = $1 LIMIT 1",
+        u,
+    )
+    return dict(row) if row else None
+
+
+async def resolve_user_ref(ref: str):
+    """آیدی عددی یا @username → دیکشنری کاربر یا None."""
+    text = (ref or "").strip()
+    if not text:
+        return None
+    # numeric id
+    try:
+        tid = int(text.split()[0].lstrip("@"))
+        if str(tid) == text.split()[0].lstrip("@"):
+            u = await get_user(tid)
+            if u:
+                return u
+    except ValueError:
+        pass
+    return await get_user_by_username(text)
+
+
 async def update_user_info(user_id: int, first_name: str = "", username: str = "", chat_id=None):
     await execute(
         """
