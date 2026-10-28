@@ -120,6 +120,17 @@ async def boss_loop(bot):
     while True:
         try:
             await asyncio.sleep(CHECK_EVERY_SEC)
+            # باطل‌کردن باس‌های منقضی (۲ ساعت)
+            try:
+                from halloween.handlers import expire_stale_bosses
+                expired = await expire_stale_bosses(bot)
+                if expired:
+                    logger.info("expired %s boss fights", expired)
+            except Exception as ee:
+                logger.warning("expire bosses: %s", ee)
+            if not event_active():
+                # حتی اگر ایونت خاموش باشد، باس‌های باز را بعد از ۲ ساعت جمع کن
+                pass
             if not event_active():
                 continue
             groups = await get_all_groups()

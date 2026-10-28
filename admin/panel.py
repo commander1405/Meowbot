@@ -103,7 +103,15 @@ def boss_menu_kb():
     return _kb([
         [("🌍 فرستادن باس فایت به همه گروه‌ها", "owner:boss_all_ask")],
         [("🔍 باس برای یک گروه", "owner:boss_find")],
+        [("🛑 لغو همه باس فایت‌ها", "owner:boss_cancel_all_ask")],
         [("🔙 رویداد", "owner:halloween")],
+    ])
+
+
+def boss_cancel_all_confirm_kb():
+    return _kb([
+        [("🔴 بله، همه را لغو کن", "owner:boss_cancel_all_yes")],
+        [("🔙 انصراف", "owner:boss_menu")],
     ])
 
 
@@ -388,7 +396,46 @@ async def handle_owner_callback(bot, callback, data: str):
             pass
         return
 
+    if action == "boss_cancel_all_ask":
+        active_n = int(await fetchval(
+            "SELECT COUNT(*) FROM halloween_boss WHERE active=TRUE"
+        ) or 0)
+        await _edit(
+            msg,
+            f"🛑 **لغو همه باس فایت‌ها**\n"
+            f"تعداد باس فعال: `{active_n}`\n\n"
+            f"با تأیید، همه باس‌های فعال در همه گروه‌ها باطل می‌شوند\n"
+            f"و پیام‌شان ویرایش می‌شود.\n"
+            f"این کار برگشت‌ناپذیر است.",
+            boss_cancel_all_confirm_kb(),
+        )
+        return
+
+    if action == "boss_cancel_all_yes":
+        from halloween.handlers import cancel_all_active_bosses
+        await _edit(msg, "⏳ در حال لغو همه باس‌ها…", boss_menu_kb())
+        try:
+            report = await cancel_all_active_bosses(bot, reason="owner")
+        except Exception as e:
+            await _edit(msg, f"❌ خطا در لغو: `{e}`", boss_menu_kb())
+            return
+        try:
+            await log_action(
+                user_id, "boss_cancel_all", result="ok",
+                details={"cancelled": report.get("cancelled"), "total": report.get("total")},
+            )
+        except Exception:
+            pass
+        await _edit(
+            msg,
+            f"✅ **همه باس‌ها لغو شد**\n"
+            f"باطل‌شده: `{report.get('cancelled', 0)}` / `{report.get('total', 0)}`",
+            boss_menu_kb(),
+        )
+        return
+
     # --- Ads (MEGA-style single promo button) ---
+
     if action == "ads" or action.startswith("ad:"):
         from admin.ads_mgmt import (
             ads_home_text, ads_home_kb, ads_cancel_kb,

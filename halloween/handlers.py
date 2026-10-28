@@ -13,7 +13,7 @@ from halloween.event_settings import (
     TEHRAN, event_active, event_status_text, is_chocolate_night,
     PUMPKIN_MIN, PUMPKIN_MAX, PUMPKIN_EXPIRE_SEC, PUMPKIN_SPAWN_COOLDOWN_SEC, PUMPKIN_ITEM_ID,
     BOSS_MAX_HP, BOSS_ATTACK_COOLDOWN_SEC, BOSS_BASE_DAMAGE, BOSS_DAMAGE_PER_GYM,
-    BOSS_DAMAGE_PER_PET_LV, BOSS_MAX_DAMAGE, BOSS_FATIGUE_LIMIT_BASE, BOSS_FATIGUE_RECOVERY_SEC,
+    BOSS_DAMAGE_PER_PET_LV, BOSS_MAX_DAMAGE, BOSS_FATIGUE_LIMIT_BASE, BOSS_FATIGUE_RECOVERY_SEC, BOSS_EXPIRE_SEC,
     PUMPKIN_SELL_COINS, CHOCOLATE_SELL_COINS, WITCH_SHOP, SKIN_CATALOG,
     CHOCOLATE_CLAIM_COOLDOWN_SEC, CHOCOLATE_DAILY_CAP, CHOCOLATE_ITEM_ID,
     SKIN_PUMPKIN, SKIN_GHOST, SKIN_WITCH, SKIN_VAMPIRE,
@@ -567,6 +567,112 @@ async def spawn_boss(bot, chat_id: str, *, update_schedule: bool = True) -> bool
         logger.warning("boss spawn: %s", e)
         await execute("UPDATE halloween_boss SET active=FALSE WHERE id=$1", bid)
         return False
+
+
+
+BOSS_FAIL_TEXT = (
+    "👻 **روح شکست نخورد...**\n"
+    "━━━━━━━━━━━━━━\n"
+    "روح از چنگ گربه‌ها فرار کرد و آن‌ها را اذیت کرد 😿\n"
+    "باس فایت تمام شد (زمان به پایان رسید / لغو شد).\n"
+    "━━━━━━━━━━━━━━"
+)
+
+
+async def _edit_boss_message(bot, chat_id: str, message_id: str, text: str) -> bool:
+    """ویرایش پیام باس در گروه بدون object پیام."""
+    if not bot or not chat_id or not message_id:
+        return False
+    mid = message_id
+    # روش‌های رایج API بله
+    for attempt in (
+        lambda: bot.edit_message(chat_id, mid, text),
+        lambda: bot.edit_message(chat_id=chat_id, message_id=mid, text=text),
+        lambda: bot.edit_message_text(text, chat_id, mid),
+        lambda: bot.edit_message_text(chat_id=chat_id, message_id=mid, text=text),
+    ):
+        try:
+            res = attempt()
+            if hasattr(res, "__await__"):
+                await res
+            return True
+        except TypeError:
+            continue
+        except Exception:
+            continue
+    # fallback: پیام جدید
+    try:
+        await bot.send_message(chat_id, text)
+        return True
+    except Exception as e:
+        logger.debug("boss msg edit/send fail %s: %s", chat_id, e)
+        return False
+
+
+async def fail_boss(bot, boss_row, *, reason: str = "expired") -> bool:
+    """باطل کردن یک باس فعال و ویرایش پیام."""
+    bid = int(boss_row["id"])
+    chat_id = str(boss_row.get("chat_id") or "")
+    mid = str(boss_row.get("message_id") or "")
+    row = await fetchrow(
+        """
+        UPDATE halloween_boss
+        SET active = FALSE,
+            finished_at = COALESCE(finished_at, NOW())
+        WHERE id = $1 AND active = TRUE
+        RETURNING id
+        """,
+        bid,
+    )
+    if not row:
+        return False
+    text = BOSS_FAIL_TEXT
+    if reason == "owner":
+        text = (
+            "👻 **باس فایت لغو شد**\n"
+            "━━━━━━━━━━━━━━\n"
+            "مالک ربات همه باس‌های فعال را باطل کرد.\n"
+            "روح رفت... ولی شاید دوباره برگردد 😼\n"
+            "━━━━━━━━━━━━━━"
+        )
+    await _edit_boss_message(bot, chat_id, mid, text)
+    return True
+
+
+async def cancel_all_active_bosses(bot, *, reason: str = "owner") -> dict:
+    """لغو همه باس‌های فعال. گزارش: cancelled / edit_failed."""
+    rows = await fetch(
+        "SELECT * FROM halloween_boss WHERE active = TRUE ORDER BY id"
+    )
+    cancelled = 0
+    for r in rows or []:
+        try:
+            ok = await fail_boss(bot, r, reason=reason)
+            if ok:
+                cancelled += 1
+        except Exception as e:
+            logger.warning("cancel boss %s: %s", r.get("id"), e)
+    return {"cancelled": cancelled, "total": len(rows or [])}
+
+
+async def expire_stale_bosses(bot) -> int:
+    """باس‌هایی که بیش از BOSS_EXPIRE_SEC از created_at گذشته‌اند باطل می‌شوند."""
+    rows = await fetch(
+        """
+        SELECT * FROM halloween_boss
+        WHERE active = TRUE
+          AND EXTRACT(EPOCH FROM (NOW() - created_at)) >= $1
+        """,
+        float(BOSS_EXPIRE_SEC),
+    )
+    n = 0
+    for r in rows or []:
+        try:
+            if await fail_boss(bot, r, reason="expired"):
+                n += 1
+        except Exception as e:
+            logger.warning("expire boss %s: %s", r.get("id"), e)
+    return n
 
 
 def _bar(hp: int, max_hp: int, width: int = 12) -> str:
