@@ -47,7 +47,7 @@ ALLOWED_GROUP = [
     "@testcmbot",
     "@lilililillilililililililili",
     "@MeowKonan",
-    "@possibly",
+    "",
 ]
 
 # ------------------------------------------
