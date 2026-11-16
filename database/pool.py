@@ -18,12 +18,25 @@ _sqlite: sqlite3.Connection | None = None
 _lock = asyncio.Lock()
 
 
-def _to_sqlite_sql(query: str) -> str:
+def _to_sqlite_sql(query: str, args: tuple = ()) -> tuple[str, tuple]:
+    """Convert asyncpg $1,$2 placeholders to sqlite ? (expand repeats)."""
     q = query
     q = re.sub(r"::\w+", "", q)
     q = re.sub(r"\bILIKE\b", "LIKE", q, flags=re.IGNORECASE)
-    q = re.sub(r"\$\d+", "?", q)
-    return q
+    q = re.sub(r"\bNOW\s*\(\s*\)", "datetime('now')", q, flags=re.IGNORECASE)
+    new_args: list = []
+
+    def repl(m):
+        idx = int(m.group(1)) - 1
+        if idx < 0 or idx >= len(args):
+            raise IndexError(
+                f"SQL placeholder ${idx + 1} out of range for {len(args)} args"
+            )
+        new_args.append(args[idx])
+        return "?"
+
+    q = re.sub(r"\$(\d+)", repl, q)
+    return q, tuple(new_args)
 
 
 class _Row(dict):
@@ -39,18 +52,14 @@ class _Row(dict):
             raise AttributeError(item) from e
 
 
-def _row_from(cursor, values) -> _Row | None:
-    if values is None:
-        return None
-    cols = [d[0] for d in cursor.description]
-    return _Row({c: values[i] for i, c in enumerate(cols)})
-
-
 def _connect_sqlite() -> sqlite3.Connection:
     path = SQLITE_PATH or ":memory:"
     if path == ":memory:":
-        # shared in-memory across this process
-        conn = sqlite3.connect("file:meowbot_local?mode=memory&cache=shared", uri=True, check_same_thread=False)
+        conn = sqlite3.connect(
+            "file:meowbot_local?mode=memory&cache=shared",
+            uri=True,
+            check_same_thread=False,
+        )
     else:
         conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -106,23 +115,19 @@ async def close_pool():
         logger.info("PostgreSQL pool closed")
 
 
-def _exec(conn: sqlite3.Connection, query: str, args: tuple):
-    sql = _to_sqlite_sql(query)
-    cur = conn.execute(sql, args)
-    conn.commit()
-    return cur
-
-
 async def fetch(query: str, *args):
     if LOCAL_MODE or not DATABASE_URL:
         async with _lock:
             conn = await get_pool()
 
             def _run():
-                cur = conn.execute(_to_sqlite_sql(query), args)
+                sql, bind = _to_sqlite_sql(query, args)
+                cur = conn.execute(sql, bind)
                 rows = cur.fetchall()
                 desc = cur.description
-                return [_Row({desc[i][0]: r[i] for i in range(len(desc))}) for r in rows]
+                return [
+                    _Row({desc[i][0]: r[i] for i in range(len(desc))}) for r in rows
+                ]
 
             return await asyncio.to_thread(_run)
     pool = await get_pool()
@@ -136,11 +141,14 @@ async def fetchrow(query: str, *args):
             conn = await get_pool()
 
             def _run():
-                cur = conn.execute(_to_sqlite_sql(query), args)
+                sql, bind = _to_sqlite_sql(query, args)
+                cur = conn.execute(sql, bind)
                 row = cur.fetchone()
                 if row is None:
                     return None
-                return _Row({cur.description[i][0]: row[i] for i in range(len(cur.description))})
+                return _Row(
+                    {cur.description[i][0]: row[i] for i in range(len(cur.description))}
+                )
 
             return await asyncio.to_thread(_run)
     pool = await get_pool()
@@ -154,7 +162,8 @@ async def fetchval(query: str, *args):
             conn = await get_pool()
 
             def _run():
-                cur = conn.execute(_to_sqlite_sql(query), args)
+                sql, bind = _to_sqlite_sql(query, args)
+                cur = conn.execute(sql, bind)
                 row = cur.fetchone()
                 return None if row is None else row[0]
 
@@ -170,7 +179,8 @@ async def execute(query: str, *args):
             conn = await get_pool()
 
             def _run():
-                cur = conn.execute(_to_sqlite_sql(query), args)
+                sql, bind = _to_sqlite_sql(query, args)
+                cur = conn.execute(sql, bind)
                 conn.commit()
                 rc = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
                 q = query.lstrip().split(None, 1)[0].upper() if query.strip() else "OK"
@@ -188,7 +198,11 @@ async def executemany(query: str, args_list):
             conn = await get_pool()
 
             def _run():
-                conn.executemany(_to_sqlite_sql(query), args_list)
+                if not args_list:
+                    return
+                sql, _ = _to_sqlite_sql(query, tuple(args_list[0]))
+                bind_rows = [_to_sqlite_sql(query, tuple(a))[1] for a in args_list]
+                conn.executemany(sql, bind_rows)
                 conn.commit()
 
             return await asyncio.to_thread(_run)

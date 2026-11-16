@@ -111,97 +111,55 @@ _db_ready = False
 
 @bot.event
 async def on_ready():
-    global _ready_lock, _db_ready
+    """Bale ready — DB already bootstrapped in async_main before connect."""
+    global _ready_lock
     if _ready_lock:
-        print("⚠️ on_ready re-entry ignored (already initializing/ready)")
+        print("⚠️ on_ready re-entry ignored")
         return
     _ready_lock = True
     print("=" * 55)
-    print(f"🐱 {BOT_NAME} v{BOT_VERSION} ONLINE (Glass UI)")
+    print(f"🐱 {BOT_NAME} v{BOT_VERSION} ONLINE (Glass UI) | LOCAL_MODE")
+    print(f"👑 Owner: {OWNER_ID}")
+    print("📩 منتظر پیام… /start را در پیوی بفرستید")
+    print("=" * 55)
     try:
         patch_bot_messaging(bot)
     except Exception as _pe:
         print(f"⚠️ promo patch: {_pe}")
-    print("=" * 55)
-
-    db_ok = False
-    try:
-        await init_database()
-        await seed_achievements()
-        await seed_missions()
-        await seed_shop()
+    # schedulers (non-fatal)
+    for label, loader in (
+        ("Auto Guide", lambda: __import__("guides.scheduler", fromlist=["start_guide_scheduler"]).start_guide_scheduler(bot)),
+        ("Season", lambda: __import__("seasons.scheduler", fromlist=["start_season_scheduler"]).start_season_scheduler(bot)),
+        ("Halloween boss", lambda: __import__("halloween.scheduler", fromlist=["start_boss_scheduler"]).start_boss_scheduler(bot)),
+        ("Pet night", lambda: __import__("pet.night_schedule", fromlist=["start_night_scheduler"]).start_night_scheduler(bot)),
+    ):
         try:
-            from halloween.schema import ensure_halloween_schema
-            await ensure_halloween_schema()
-            print("✅ Halloween schema ready")
-            try:
-                from halloween.event_settings import refresh_event_flag
-                on = await refresh_event_flag()
-                print(f"🎃 Halloween enabled={on}")
-            except Exception as _he:
-                print(f"⚠️ Halloween flag: {_he}")
+            loader()
+            print(f"✅ {label} scheduler")
         except Exception as e:
-            print(f"⚠️ Halloween schema (non-fatal): {e}")
-        db_ok = True
-        _db_ready = True
-        print("✅ Database + seeds ready")
-        try:
-            from utils.ui_helpers import refresh_promo_from_db
-            await refresh_promo_from_db()
-            print("✅ Promo ad config loaded")
-        except Exception as _pe:
-            print(f"⚠️ Promo config: {_pe}")
-    except Exception as e:
-        _db_ready = False
-        print(f"❌ Database init FAILED — bot is NOT fully operational: {type(e).__name__}: {e}")
-        traceback.print_exc()
-        print("=" * 55)
-        return
-
-    if not db_ok:
-        print("❌ Skipping schedulers — database unavailable")
-        print("=" * 55)
-        return
-
-    try:
-        from guides.scheduler import start_guide_scheduler
-        start_guide_scheduler(bot)
-        print("✅ Auto Guide scheduler")
-    except Exception as e:
-        print(f"⚠️ Guide scheduler: {e}")
-
-    try:
-        from seasons.scheduler import start_season_scheduler
-        start_season_scheduler(bot)
-        print("✅ Season scheduler")
-    except Exception as e:
-        print(f"⚠️ Season scheduler: {e}")
-
-    try:
-        from halloween.scheduler import start_boss_scheduler
-        start_boss_scheduler(bot)
-        print("✅ Halloween boss scheduler")
-    except Exception as e:
-        print(f"⚠️ Boss scheduler: {e}")
-
-    try:
-        from pet.night_schedule import start_night_scheduler
-        start_night_scheduler(bot)
-        print("✅ Pet night sleep scheduler")
-    except Exception as e:
-        print(f"⚠️ Night scheduler: {e}")
-
-    print(f"👑 Owner: {OWNER_ID}")
-    print("=" * 55)
+            print(f"⚠️ {label} scheduler: {e}")
 
 
 @bot.event
 async def on_message(message: Message):
     try:
-        text = getattr(message, 'text', None) or getattr(message, 'content', None)
+        # Extract text from multiple possible Bale payload shapes
+        text = (
+            getattr(message, "text", None)
+            or getattr(message, "content", None)
+            or getattr(message, "caption", None)
+        )
+        if text is None and isinstance(getattr(message, "to_dict", None), type(lambda: None)):
+            try:
+                d = message.to_dict() or {}
+                text = d.get("text") or d.get("caption") or d.get("content")
+            except Exception:
+                pass
         if not text:
+            logger.info("on_message: empty text ignored")
             return
         text = str(text).strip()
+        logger.info("on_message text=%r", text[:80])
 
         chat = message.chat
         chat_id = getattr(chat, "id", None)
@@ -214,6 +172,35 @@ async def on_message(message: Message):
         user_id = int(author.id)
         first_name = getattr(author, "first_name", None) or "Unknown"
         username = getattr(author, "username", None) or ""
+
+        # ---- Early /start (must never be swallowed) ----
+        if text in ("/start", "start", "منو", "شروع", "/menu"):
+            try:
+                try:
+                    await create_user(int(user_id), first_name=first_name, username=username, chat_id=chat_id)
+                except Exception as _cu:
+                    logger.warning("create_user on start: %s", _cu)
+                try:
+                    _tok = set_panel_owner(int(user_id))
+                    try:
+                        kb = await _main_kb()
+                    finally:
+                        reset_panel_owner(_tok)
+                    await message.reply(WELCOME, components=kb)
+                except Exception as e:
+                    logger.exception("start reply")
+                    try:
+                        await message.reply(str(WELCOME)[:3500])
+                    except Exception as e2:
+                        logger.error("plain start reply failed: %s", e2)
+                        try:
+                            await bot.send_message(user_id, str(WELCOME)[:3500])
+                        except Exception as e3:
+                            logger.error("send_message start failed: %s", e3)
+            except Exception as e:
+                logger.exception("early start fatal: %s", e)
+            return
+
         # تشخیص PV: در بله ممکن است username داشته باشد؛ title فقط برای گروه/کانال است
         chat_type = str(getattr(chat, "type", None) or getattr(chat, "chat_type", None) or "").lower()
         if chat_type in ("private", "user", "pv", "dm"):
@@ -1152,6 +1139,16 @@ async def on_callback(callback: CallbackQuery):
 
 
 
+# Alias listeners (python-bale-bot accepts both event names)
+try:
+    bot.listen("on_message")(on_message)
+except Exception as _le:
+    logger.debug("listen on_message: %s", _le)
+try:
+    bot.listen("on_callback")(on_callback)
+except Exception as _le:
+    logger.debug("listen on_callback: %s", _le)
+
 # پشتیبانی از هر دو سبک event و handler (نسخه‌های مختلف bale)
 try:
     from bale.handlers import CallbackQueryHandler
@@ -1163,6 +1160,52 @@ except Exception as _e:
     logger.debug(f"CallbackQueryHandler not registered: {_e}")
 
 
+async def _bootstrap_db():
+    """Init local/postgres DB before polling so /start always works."""
+    global _db_ready
+    from config import LOCAL_MODE
+    print(f"Starting {BOT_NAME} v{BOT_VERSION}... LOCAL_MODE={LOCAL_MODE}")
+    try:
+        await init_database()
+        await seed_achievements()
+        await seed_missions()
+        await seed_shop()
+        try:
+            from halloween.schema import ensure_halloween_schema
+            await ensure_halloween_schema()
+            print("✅ Halloween schema ready")
+            try:
+                from halloween.event_settings import refresh_event_flag
+                on = await refresh_event_flag()
+                print(f"🎃 Halloween enabled={on}")
+            except Exception as _he:
+                print(f"⚠️ Halloween flag: {_he}")
+        except Exception as e:
+            print(f"⚠️ Halloween schema (non-fatal): {e}")
+        try:
+            from utils.ui_helpers import refresh_promo_from_db
+            await refresh_promo_from_db()
+        except Exception as _pe:
+            print(f"⚠️ Promo config: {_pe}")
+        _db_ready = True
+        print("✅ Database + seeds ready (before connect)")
+    except Exception as e:
+        _db_ready = False
+        print(f"❌ Database init FAILED: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        # still start bot so user sees replies / errors
+
+
+async def async_main():
+    await _bootstrap_db()
+    # python-bale-bot 2.5 lifecycle: async with bot → connect → updater.polling
+    async with bot:
+        await bot.connect()
+
+
 if __name__ == "__main__":
-    print(f"Starting {BOT_NAME} v{BOT_VERSION}...")
-    bot.run()
+    import asyncio
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        print("MeowBot stopped.")

@@ -504,27 +504,11 @@ async def init_schema():
         try:
             from config import OWNER_ID
             await execute(
-                """
-                INSERT INTO admins (user_id, role, permissions, enabled, note)
-                VALUES (?, 'OWNER', '["*"]', 1, 'System Owner')
-                ON CONFLICT(user_id) DO UPDATE SET
-                    role=excluded.role,
-                    permissions=excluded.permissions,
-                    enabled=excluded.enabled
-                """,
-                int(OWNER_ID),
+                "INSERT OR IGNORE INTO admins (user_id, role, permissions, enabled, note) VALUES ($1, $2, $3, $4, $5)",
+                int(OWNER_ID), "OWNER", '["*"]', 1, "System Owner",
             )
         except Exception as e:
-            # placeholder conversion turns ? from our manual ? — execute already converts $n only
             logger.warning("owner seed local: %s", e)
-            try:
-                from config import OWNER_ID
-                await execute(
-                    "INSERT OR IGNORE INTO admins (user_id, role, permissions, enabled, note) VALUES ($1, $2, $3, $4, $5)",
-                    int(OWNER_ID), "OWNER", '["*"]', 1, "System Owner",
-                )
-            except Exception as e2:
-                logger.warning("owner seed local retry: %s", e2)
 
         logger.info("✅ Local SQLite schema ready (Termux / no Railway, no disk persist by default)")
         return
