@@ -6,8 +6,34 @@
 
 from .pool import execute, get_pool
 import logging
+import re
+
+from config import LOCAL_MODE, DATABASE_URL
 
 logger = logging.getLogger("meowbot.db")
+
+
+def _is_local() -> bool:
+    return bool(LOCAL_MODE or not DATABASE_URL)
+
+
+def _sqlite_schema(sql: str) -> str:
+    """Best-effort PostgreSQL → SQLite DDL adaptation."""
+    s = sql
+    s = s.replace("TIMESTAMPTZ", "TEXT")
+    s = s.replace("TIMESTAMP WITH TIME ZONE", "TEXT")
+    s = s.replace("DOUBLE PRECISION", "REAL")
+    s = s.replace("BIGINT", "INTEGER")
+    s = s.replace("BOOLEAN DEFAULT TRUE", "INTEGER DEFAULT 1")
+    s = s.replace("BOOLEAN DEFAULT FALSE", "INTEGER DEFAULT 0")
+    s = s.replace("BOOLEAN", "INTEGER")
+    s = s.replace("JSONB", "TEXT")
+    s = s.replace("JSON", "TEXT")
+    s = re.sub(r"SERIAL", "INTEGER", s)
+    s = re.sub(r"DEFAULT\s+NOW\(\)", "DEFAULT (datetime('now'))", s, flags=re.IGNORECASE)
+    s = re.sub(r"NOW\(\)", "datetime('now')", s, flags=re.IGNORECASE)
+    # SQLite has no ADD COLUMN IF NOT EXISTS in older versions — handled separately
+    return s
 
 SCHEMA_SQL = """
 -- ========================================
@@ -403,12 +429,111 @@ CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets (user_id);
 """
 
 
+
 async def init_schema():
     """Create all tables if they don't exist."""
+    await get_pool()
+
+    if _is_local():
+        adapted = _sqlite_schema(SCHEMA_SQL)
+        for stmt in [s.strip() for s in adapted.split(";") if s.strip()]:
+            try:
+                await execute(stmt)
+            except Exception as e:
+                logger.warning("sqlite schema: %s | %s", e, stmt[:100].replace("\n", " "))
+
+        extras = [
+            """CREATE TABLE IF NOT EXISTS bug_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT DEFAULT '',
+                first_name TEXT DEFAULT '',
+                body TEXT NOT NULL,
+                status TEXT DEFAULT 'open',
+                resolved_by INTEGER DEFAULT NULL,
+                resolved_at TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            )""",
+            """CREATE TABLE IF NOT EXISTS group_stats (
+                chat_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                meow_points INTEGER DEFAULT 0,
+                total_meows INTEGER DEFAULT 0,
+                last_meow TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (chat_id, user_id)
+            )""",
+            """CREATE TABLE IF NOT EXISTS bot_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT DEFAULT '',
+                updated_at TEXT DEFAULT (datetime('now'))
+            )""",
+            """CREATE TABLE IF NOT EXISTS bans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                tracking_code TEXT UNIQUE NOT NULL,
+                reason TEXT DEFAULT '',
+                description TEXT DEFAULT '',
+                duration_days INTEGER DEFAULT NULL,
+                is_permanent INTEGER DEFAULT 0,
+                banned_by INTEGER NOT NULL,
+                starts_at TEXT DEFAULT (datetime('now')),
+                ends_at TEXT DEFAULT NULL,
+                active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now'))
+            )""",
+            """CREATE TABLE IF NOT EXISTS tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                tracking_code TEXT DEFAULT '',
+                subject TEXT DEFAULT '',
+                body TEXT NOT NULL,
+                status TEXT DEFAULT 'open',
+                admin_reply TEXT DEFAULT '',
+                replied_by INTEGER DEFAULT NULL,
+                replied_at TEXT DEFAULT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            )""",
+        ]
+        for stmt in extras:
+            try:
+                await execute(stmt)
+            except Exception as e:
+                logger.warning("sqlite extra: %s", e)
+
+        # Owner admin row
+        try:
+            from config import OWNER_ID
+            await execute(
+                """
+                INSERT INTO admins (user_id, role, permissions, enabled, note)
+                VALUES (?, 'OWNER', '["*"]', 1, 'System Owner')
+                ON CONFLICT(user_id) DO UPDATE SET
+                    role=excluded.role,
+                    permissions=excluded.permissions,
+                    enabled=excluded.enabled
+                """,
+                int(OWNER_ID),
+            )
+        except Exception as e:
+            # placeholder conversion turns ? from our manual ? — execute already converts $n only
+            logger.warning("owner seed local: %s", e)
+            try:
+                from config import OWNER_ID
+                await execute(
+                    "INSERT OR IGNORE INTO admins (user_id, role, permissions, enabled, note) VALUES ($1, $2, $3, $4, $5)",
+                    int(OWNER_ID), "OWNER", '["*"]', 1, "System Owner",
+                )
+            except Exception as e2:
+                logger.warning("owner seed local retry: %s", e2)
+
+        logger.info("✅ Local SQLite schema ready (Termux / no Railway, no disk persist by default)")
+        return
+
+    # PostgreSQL
+    import asyncpg
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(SCHEMA_SQL)
-        # Ensure Owner is in admins table
         from config import OWNER_ID
         await conn.execute(
             """
@@ -419,87 +544,86 @@ async def init_schema():
             """,
             OWNER_ID,
         )
-    # Safe migrations for existing DBs
-    try:
-        await conn.execute(
-            "ALTER TABLE groups ADD COLUMN IF NOT EXISTS meow_enabled BOOLEAN DEFAULT TRUE"
-        )
-        await conn.execute(
-            "ALTER TABLE groups ALTER COLUMN guide_interval SET DEFAULT 9000"
-        )
-    except Exception as e:
-        logger.warning(f"groups migration: {e}")
-    
-    try:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS bug_reports (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                username TEXT DEFAULT '',
-                first_name TEXT DEFAULT '',
-                body TEXT NOT NULL,
-                status TEXT DEFAULT 'open',
-                resolved_by BIGINT DEFAULT NULL,
-                resolved_at TIMESTAMPTZ DEFAULT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
+        try:
+            await conn.execute(
+                "ALTER TABLE groups ADD COLUMN IF NOT EXISTS meow_enabled BOOLEAN DEFAULT TRUE"
             )
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS group_stats (
-                chat_id TEXT NOT NULL,
-                user_id BIGINT NOT NULL,
-                meow_points INTEGER DEFAULT 0,
-                total_meows INTEGER DEFAULT 0,
-                last_meow TIMESTAMPTZ DEFAULT NOW(),
-                PRIMARY KEY (chat_id, user_id)
+            await conn.execute(
+                "ALTER TABLE groups ALTER COLUMN guide_interval SET DEFAULT 9000"
             )
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS bot_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT DEFAULT '',
-                updated_at TIMESTAMPTZ DEFAULT NOW()
+        except Exception as e:
+            logger.warning(f"groups migration: {e}")
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bug_reports (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    username TEXT DEFAULT '',
+                    first_name TEXT DEFAULT '',
+                    body TEXT NOT NULL,
+                    status TEXT DEFAULT 'open',
+                    resolved_by BIGINT DEFAULT NULL,
+                    resolved_at TIMESTAMPTZ DEFAULT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS group_stats (
+                    chat_id TEXT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    meow_points INTEGER DEFAULT 0,
+                    total_meows INTEGER DEFAULT 0,
+                    last_meow TIMESTAMPTZ DEFAULT NOW(),
+                    PRIMARY KEY (chat_id, user_id)
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT DEFAULT '',
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+        except Exception as e:
+            logger.warning(f"reports/group_stats migration: {e}")
+        try:
+            await conn.execute(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_game_reward DOUBLE PRECISION DEFAULT 0"
             )
-        """)
-    except Exception as e:
-        logger.warning(f"reports/group_stats migration: {e}")
-    try:
-        await conn.execute(
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_game_reward DOUBLE PRECISION DEFAULT 0"
-        )
-    except Exception as e:
-        logger.warning(f"last_game_reward migration: {e}")
-    try:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS bans (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                tracking_code TEXT UNIQUE NOT NULL,
-                reason TEXT DEFAULT '',
-                description TEXT DEFAULT '',
-                duration_days INTEGER DEFAULT NULL,
-                is_permanent BOOLEAN DEFAULT FALSE,
-                banned_by BIGINT NOT NULL,
-                starts_at TIMESTAMPTZ DEFAULT NOW(),
-                ends_at TIMESTAMPTZ DEFAULT NULL,
-                active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS tickets (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                tracking_code TEXT DEFAULT '',
-                subject TEXT DEFAULT '',
-                body TEXT NOT NULL,
-                status TEXT DEFAULT 'open',
-                admin_reply TEXT DEFAULT '',
-                replied_by BIGINT DEFAULT NULL,
-                replied_at TIMESTAMPTZ DEFAULT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-    except Exception as e:
-        logger.warning(f"bans/tickets migration: {e}")
+        except Exception as e:
+            logger.warning(f"last_game_reward migration: {e}")
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS bans (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    tracking_code TEXT UNIQUE NOT NULL,
+                    reason TEXT DEFAULT '',
+                    description TEXT DEFAULT '',
+                    duration_days INTEGER DEFAULT NULL,
+                    is_permanent BOOLEAN DEFAULT FALSE,
+                    banned_by BIGINT NOT NULL,
+                    starts_at TIMESTAMPTZ DEFAULT NOW(),
+                    ends_at TIMESTAMPTZ DEFAULT NULL,
+                    active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS tickets (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    tracking_code TEXT DEFAULT '',
+                    subject TEXT DEFAULT '',
+                    body TEXT NOT NULL,
+                    status TEXT DEFAULT 'open',
+                    admin_reply TEXT DEFAULT '',
+                    replied_by BIGINT DEFAULT NULL,
+                    replied_at TIMESTAMPTZ DEFAULT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+        except Exception as e:
+            logger.warning(f"bans/tickets migration: {e}")
     logger.info("✅ Database schema initialized")
+

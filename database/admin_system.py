@@ -132,10 +132,22 @@ CREATE TABLE IF NOT EXISTS admin_promotion_requests (
 
 
 async def ensure_admin_system_schema():
-    from .pool import get_pool
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(ADMIN_SYSTEM_SQL)
+    from config import LOCAL_MODE, DATABASE_URL
+    from .schema import _sqlite_schema, _is_local
+
+    sql = ADMIN_SYSTEM_SQL
+    if _is_local():
+        adapted = _sqlite_schema(sql)
+        for stmt in [s.strip() for s in adapted.split(";") if s.strip()]:
+            try:
+                await execute(stmt)
+            except Exception as e:
+                print(f"admin_system local schema: {e}")
+    else:
+        from .pool import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(ADMIN_SYSTEM_SQL)
     await _migrate_role_extras()
     await seed_role_defs()
     await seed_builtin_tasks()
@@ -176,9 +188,23 @@ async def _migrate_role_extras():
         )""",
         "CREATE INDEX IF NOT EXISTS idx_admin_warnings ON admin_warnings (admin_id, created_at DESC)",
     ]
+    from .schema import _is_local, _sqlite_schema
     for sql in alters:
         try:
-            await execute(sql)
+            q = _sqlite_schema(sql) if _is_local() else sql
+            # SQLite: ADD COLUMN IF NOT EXISTS is OK on 3.35+; else ignore
+            if _is_local() and "ADD COLUMN IF NOT EXISTS" in q.upper():
+                # try plain ADD COLUMN once
+                try:
+                    await execute(q)
+                except Exception:
+                    q2 = q.replace("IF NOT EXISTS", "").replace("if not exists", "")
+                    try:
+                        await execute(q2)
+                    except Exception as e:
+                        print(f"role migrate: {e}")
+            else:
+                await execute(q)
         except Exception as e:
             print(f"role migrate: {e}")
 

@@ -2,7 +2,7 @@
 # 🐱 MeowBot - Configuration (Production)
 # ==========================================
 # مقادیر واقعی پروژه حفظ شده‌اند.
-# برای Railway: DATABASE_URL از Environment خوانده می‌شود.
+# پیش‌فرض: اجرای محلی Termux با SQLite حافظه (بدون Railway).
 # ==========================================
 
 import os
@@ -27,18 +27,22 @@ ADMINS = [
 ]
 
 # ------------------------------------------
-# Database — PostgreSQL (Railway)
+# Database — Local Termux (default) / optional PostgreSQL
 # ------------------------------------------
-# روی Railway متغیر DATABASE_URL به‌صورت خودکار ست می‌شود.
-# اگر local اجرا می‌کنید، مقدار را اینجا یا در .env بگذارید.
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:NfponPUlsIArmWYAfusdHVhErHdXiXYW@postgres.railway.internal:5432/railway",
-)
+# LOCAL_MODE=1 (پیش‌فرض): فقط SQLite در حافظه گوشی — بدون Railway
+# داده بعد از خاموش شدن ربات پاک می‌شود (چیزی روی دیسک ذخیره نمی‌شود).
+# برای PostgreSQL/Railway: LOCAL_MODE=0 و DATABASE_URL را ست کنید.
+LOCAL_MODE = os.getenv("LOCAL_MODE", "1").strip().lower() in ("1", "true", "yes", "on")
 
-# Connection pool
+# مسیر SQLite فقط اگر بخواهید روی فایل ذخیره شود (پیش‌فرض: حافظه موقت)
+# مثال Termux: /data/data/com.termux/files/home/meowbot.db
+SQLITE_PATH = os.getenv("SQLITE_PATH", ":memory:")
+
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+# Connection pool (فقط برای PostgreSQL)
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "1"))
-DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "5"))
 
 # ------------------------------------------
 # Allowed Groups (legacy — اکنون همه گروه‌ها فعال‌اند)
